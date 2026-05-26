@@ -1,11 +1,20 @@
 ---
 name: codex-kimi-code-worker
-description: "Install and operate the Kimi Code worker workflow for Codex Desktop. Use when Codex needs to: (1) check or install Kimi Code CLI, (2) complete Kimi login and verify a minimal hello-world call, (3) install or configure `kimi-code-worker-mcp`, (4) update `~/.codex/config.toml` for cross-platform MCP startup, or (5) run coding tasks through the Kimi worker flow with plan, start, short wait, get, and terminal review while minimizing Codex token usage."
+description: "Install and operate the Kimi Code worker workflow for Codex Desktop. Trigger on requests such as '让 Kimi 帮我修这个 bug', '让 Kimi 跑这个任务', '用 Kimi 处理当前项目', 'kimi 修复这个报错', or 'kimi 帮我做这个'. Use when Codex needs to: (1) check or install Kimi Code CLI, (2) complete Kimi login and verify a minimal hello-world call, (3) install or configure `kimi-code-worker-mcp`, (4) update `~/.codex/config.toml` for cross-platform MCP startup, or (5) run coding tasks through the Kimi worker flow with plan, start, short wait, get, and terminal review while minimizing Codex token usage."
 ---
 
 # Codex Kimi Code Worker
 
 Use this skill to turn Codex into a planner and reviewer for `kimi-code-worker-mcp`.
+
+Simple ways to invoke it:
+
+- 让 Kimi 帮我修这个 bug
+- 让 Kimi 跑这个任务
+- 用 Kimi 处理当前项目
+- kimi 修复这个报错
+- kimi 帮我做这个
+- `$codex-kimi-code-worker`
 
 Keep the contract fixed:
 
@@ -16,6 +25,34 @@ Keep the contract fixed:
 - Codex requests `diff` only when terminal evidence is insufficient.
 
 Do not let the workflow drift into long blocking waits or running-time chatter.
+
+## Core Principles
+
+Apply these principles whenever Codex delegates work to Kimi:
+
+1. Think before coding.
+   - Codex must define the current slice, scope, assumptions, and success criteria before starting the worker.
+   - If the task has multiple plausible interpretations, prefer `kimi_plan_implementation` instead of silently choosing one.
+   - If the task is still ambiguous after local inspection, stop and clarify before dispatching.
+
+2. Simplicity first.
+   - Ask Kimi for the minimum change that satisfies the slice.
+   - Do not let Kimi add speculative features, abstractions, configurability, or refactors that were not requested.
+   - If a 20-line change solves the problem, do not accept a 200-line rewrite.
+
+3. Surgical changes.
+   - Every changed file should trace directly to the current slice.
+   - Use narrow `allowed_dirs` whenever practical.
+   - If Kimi notices unrelated dead code or cleanup opportunities, report them later instead of touching them now.
+
+4. Goal-driven execution.
+   - Each slice must have explicit `Success` and `Validation`.
+   - Do not dispatch vague tasks such as "make it work" or "clean this up".
+   - For fixes, prefer a check that proves the bug is gone. For refactors, prefer checks that prove behavior stayed intact.
+
+5. Codex decides before dispatch, Kimi executes after dispatch.
+   - Before dispatch: Codex resolves tradeoffs, defines boundaries, and chooses the slice.
+   - After dispatch: Kimi should not broaden scope on its own. If more work remains, it should stop after the current slice.
 
 ## Phase 1: Onboarding
 

@@ -114,6 +114,23 @@ python ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github
 - Kimi Code CLI 和 `kimi-code-worker-mcp` 的安装与体检
 - `plan -> start -> short wait -> get -> terminal review` 的 worker 工作流指引
 
+skill 内固化的工作原则：
+
+- 先定当前 slice，再派工
+- 最小改动优先，不做顺手重构
+- 每个 slice 都要有明确 `Success` 和 `Validation`
+- 运行中只看事实、弱推断、下一步动作
+- 终态先看 `failure_reason / useful_outputs_present / produced_files`
+
+常用触发说法：
+
+- `让 Kimi 帮我修这个 bug`
+- `让 Kimi 跑这个任务`
+- `用 Kimi 处理当前项目`
+- `kimi 修复这个报错`
+- `kimi 帮我做这个`
+- 或直接写 `$codex-kimi-code-worker`
+
 Codex 重启后，当前线程不会自动恢复之前的 MCP 连接。正确做法是新开一个会话，再次调用 `$codex-kimi-code-worker`。
 
 ## 权限继承
