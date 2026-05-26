@@ -1,4 +1,4 @@
 interface:
   display_name: "Codex Kimi Code Worker"
-  short_description: "让 Kimi 帮你干活，并由 Codex 规划验收"
-  default_prompt: "Use $codex-kimi-code-worker。例子：让 Kimi 帮我修这个 bug，只改 src/login.tsx，并在终态跑 npm test。"
+  short_description: "安装或使用 Kimi worker，并由 Codex 规划、下发和验收"
+  default_prompt: "Use $codex-kimi-code-worker。例子：从这个仓库安装 codex-kimi-code-worker skill 和 kimi-code-worker-mcp。或者：让 Kimi 帮我修这个 bug，只改 src/login.tsx，并在终态跑 npm test。"

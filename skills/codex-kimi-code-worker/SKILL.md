@@ -1,6 +1,6 @@
 ---
 name: codex-kimi-code-worker
-description: "Install and operate the Kimi Code worker workflow for Codex Desktop. Trigger on requests such as '让 Kimi 帮我修这个 bug', '让 Kimi 跑这个任务', '用 Kimi 处理当前项目', 'kimi 修复这个报错', or 'kimi 帮我做这个'. Use when Codex needs to: (1) check or install Kimi Code CLI, (2) complete Kimi login and verify a minimal hello-world call, (3) install or configure `kimi-code-worker-mcp`, (4) update `~/.codex/config.toml` for cross-platform MCP startup, or (5) run coding tasks through the Kimi worker flow with plan, start, short wait, get, and terminal review while minimizing Codex token usage."
+description: "Install and operate the Kimi Code worker workflow for Codex Desktop. Trigger on requests such as '让 Kimi 帮我修这个 bug', '让 Kimi 跑这个任务', '用 Kimi 处理当前项目', 'kimi 修复这个报错', 'kimi 帮我做这个', or installation requests like '从这个仓库安装 codex-kimi-code-worker skill 和 kimi-code-worker-mcp'. Use when Codex needs to: (1) check or install Kimi Code CLI, (2) complete Kimi login and verify a minimal hello-world call, (3) install or configure `kimi-code-worker-mcp`, (4) update `~/.codex/config.toml` for cross-platform MCP startup, or (5) run coding tasks through the Kimi worker flow with plan, start, short wait, get, and terminal review while minimizing Codex token usage."
 ---
 
 # Codex Kimi Code Worker
@@ -9,6 +9,7 @@ Use this skill to turn Codex into a planner and reviewer for `kimi-code-worker-m
 
 Simple ways to invoke it:
 
+- 从这个仓库安装 codex-kimi-code-worker skill 和 kimi-code-worker-mcp
 - 让 Kimi 帮我修这个 bug
 - 让 Kimi 跑这个任务
 - 用 Kimi 处理当前项目
@@ -208,12 +209,32 @@ Do not redo installation if the machine is already healthy.
 
 Use this default flow:
 
-1. `kimi_plan_implementation` for broad, ambiguous, cross-module, or long-running tasks
+1. `kimi_plan_implementation` for broad, ambiguous, cross-module, long-running, data-collection, or multi-stage tasks
 2. `kimi_start_implementation` for one bounded slice
 3. `kimi_wait_for_job` once with `15000-30000ms`
 4. `kimi_get_job` for the main polling loop
 5. terminal review with `status`, `files_changed`, `policy`, `checks_run`, `failure_reason`
 6. request `include_diff: true` only when needed
+
+Default to planning first when any of these are true:
+
+- the task touches multiple modules or directories
+- the task likely runs for more than a few minutes
+- the task has more than one output artifact
+- the task is a data collection, research, extraction, or reporting workflow
+- the task requires more than one slice to finish cleanly
+
+For these cases, Codex should normally plan before execution instead of dispatching straight to `kimi_start_implementation`.
+
+Codex may still start directly without a planning round when the task is clearly:
+
+- small
+- single-slice
+- low-risk
+- limited to one file or one narrow directory
+- unlikely to require more than one output artifact
+
+The decision stays with Codex. The rule is: plan by default for bigger or fuzzier work, start directly for clearly bounded small work.
 
 Keep each slice narrow:
 
@@ -225,6 +246,32 @@ Success: <observable terminal condition>
 Validation: <checks>
 Strategy: prefer minimal change; do not refactor unrelated code
 ```
+
+For planned work, Codex should not approve execution until the plan states all of:
+
+- current slice
+- output files
+- allowed scope
+- success condition
+- validation command or validation method
+- stop condition
+
+If any of these are missing, refine the plan first instead of starting execution.
+
+### Data Task Default Shape
+
+For data collection or content-generation work, use this three-slice shape by default:
+
+1. `fetch`
+   - acquire raw source data only
+   - do not also clean or format the final document
+2. `normalize`
+   - turn raw data into stable JSON, CSV, or another machine-checkable intermediate
+   - validate counts, dedupe keys, and ordering here
+3. `document`
+   - generate the final Markdown, report, or summary from the normalized data
+
+Do not merge all three into one slice unless the task is trivially small.
 
 ## Running-State Rules
 
@@ -257,6 +304,14 @@ Do not:
 - steer a running job by default
 - launch one giant multi-phase slice
 
+Use `kimi_steer_job` only when all of these are true:
+
+- the current slice is still the right slice
+- the worker direction is mostly correct
+- one concise correction can recover it
+
+If scope, outputs, or success criteria changed, do not steer. End the current attempt and start a new slice.
+
 ## Best Practices From Known Failure Modes
 
 Apply these rules by default:
@@ -272,21 +327,27 @@ Apply these rules by default:
 - If `worker_exit_without_terminal_event=true`, trust the MCP's reconciled terminal summary first.
 - Prefer cancel and restart over repeated steer commands.
 
-Use `kimi_steer_job` only when the direction is mostly right and one concise correction is enough.
-
 ## Review Terminal State
 
 Review in this order:
 
-1. `status`
-2. `files_changed`
-3. `policy`
-4. `checks_run`
-5. `failure_reason`
-6. `useful_outputs_present`
-7. `produced_files`
-8. `contract_failed_on`
-9. `worker_exit_without_terminal_event`
+1. `useful_outputs_present`
+2. `produced_files`
+3. `status`
+4. `failure_reason`
+5. `contract_failed_on`
+6. `worker_exit_without_terminal_event`
+7. `checks_run`
+8. `policy`
+9. `files_changed`
+
+Interpret terminal state with this bias:
+
+- first decide whether useful work product exists
+- then decide whether the contract failed
+- only then decide whether rerun is necessary
+
+Do not treat `failed` as “nothing usable happened” until `produced_files` and `useful_outputs_present` say so.
 
 Only request `include_diff` when:
 
