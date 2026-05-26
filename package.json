@@ -35,7 +35,8 @@
     "mcp:smoke:workflow": "node scripts/smoke-workflow.mjs",
     "mcp:smoke:wire": "node scripts/smoke-wire-backend.mjs",
     "mcp:smoke:edge": "node scripts/smoke-edge-cases.mjs",
-    "mcp:smoke:permissions": "node scripts/smoke-codex-permissions.mjs"
+    "mcp:smoke:permissions": "node scripts/smoke-codex-permissions.mjs",
+    "mcp:smoke:registration": "node scripts/smoke-codex-registration.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

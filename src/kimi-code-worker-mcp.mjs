@@ -8,6 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import {
+  CODEX_CONFIG_FILE,
   DEFAULT_CHECK_TIMEOUT_MS,
   DEFAULT_FOREGROUND_WAIT_CAP_MS,
   DEFAULT_PLAN_TIMEOUT_MS,
@@ -20,6 +21,7 @@ import {
   TOOL_NAMES,
 } from "./core/config.mjs";
 import { formatPermissionSummary, readCodexPermissionContext } from "./core/codex-permissions.mjs";
+import { readCodexMcpRegistrationStatus } from "./core/codex-mcp-registration.mjs";
 import { getKimiInfo, isExecutable, probeKimiPrint } from "./kimi-wire-backend.mjs";
 import { JobRuntime } from "./job-runtime.mjs";
 
@@ -233,6 +235,14 @@ async function runDoctor() {
     ok: codexPermission.found,
     detail: codexPermission.found ? formatPermissionSummary(codexPermission.permission_profile) : `thread=${codexPermission.thread_id ?? "unknown"}`,
   });
+  const codexMcpRegistration = await readCodexMcpRegistrationStatus("kimi-code-worker-mcp");
+  checks.push({
+    name: "codex_mcp_registration",
+    ok: codexMcpRegistration.ok,
+    detail: codexMcpRegistration.ok
+      ? `registered via ${codexMcpRegistration.source}`
+      : `missing registration; checked ${CODEX_CONFIG_FILE} and codex mcp list`,
+  });
   checks.push({
     name: "job_root",
     ok: existsSync(JOB_ROOT),
@@ -245,6 +255,7 @@ async function runDoctor() {
     server_version: SERVER_VERSION,
     checks,
     codex_permission: codexPermission,
+    codex_mcp_registration: codexMcpRegistration,
     defaults: {
       plan_timeout_ms: DEFAULT_PLAN_TIMEOUT_MS,
       timeout_ms: DEFAULT_SYNC_TIMEOUT_MS,

@@ -8,6 +8,7 @@ export const SELF_SCRIPT = resolve(process.argv[1] ?? "kimi-code-worker-mcp.mjs"
 export const JOB_ROOT = resolve(tmpdir(), "kimi-code-worker", "jobs");
 export const CODEX_HOME = process.env.CODEX_HOME || resolve(homedir(), ".codex");
 export const CODEX_GLOBAL_STATE_FILE = join(CODEX_HOME, ".codex-global-state.json");
+export const CODEX_CONFIG_FILE = join(CODEX_HOME, "config.toml");
 export const KIMI_BIN = process.env.KIMI_BIN || "kimi";
 
 export const DEFAULT_SYNC_TIMEOUT_MS = 15 * 60 * 1000;
