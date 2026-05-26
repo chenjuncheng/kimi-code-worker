@@ -194,6 +194,40 @@ If `doctor` passes, tell the user:
 - the current thread will not auto-reconnect across restart
 - after restart, open a new thread and call `$codex-kimi-code-worker` again
 
+After onboarding succeeds, always give the user a short handoff with copyable trigger prompts. Keep it short and practical. Include at least:
+
+1. Install / reconnect check
+
+```text
+用 Kimi 检查当前 MCP 是否已经可用；如果不可用，继续帮我完成 codex-kimi-code-worker skill 和 kimi-code-worker-mcp 的安装与注册。
+```
+
+2. Small bug fix
+
+```text
+让 Kimi 帮我修这个 bug，只改 src/login.tsx，并在终态跑 npm test。
+```
+
+3. Planned larger task
+
+```text
+用 Kimi 处理当前项目。先做 plan，再把任务拆成当前 slice，等我确认后再开始执行。
+```
+
+4. Data or research task
+
+```text
+用 Kimi 做这个数据任务。按 fetch -> normalize -> document 三个 slice 推进，先给我当前 plan。
+```
+
+5. Terminal review or retry
+
+```text
+用 Kimi 继续这个任务；先看上一个 job 的终态摘要、produced_files、failure_reason，再决定是复用结果还是重开下一轮 slice。
+```
+
+If the user asked for installation only, stop after printing the restart reminder and these prompt templates. Do not immediately launch a worker task unless the user asks.
+
 ## Phase 2: Detect Whether Setup Is Already Done
 
 At the start of a later session:
