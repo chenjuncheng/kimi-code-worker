@@ -27,6 +27,10 @@ export const DEFAULT_CONNECT_TIMEOUT_MS = 15 * 1000;
 export const MAX_OUTPUT_CHARS = 20_000;
 export const MAX_STREAM_EVENTS = 200;
 export const MAX_FILE_BYTES = 5 * 1024 * 1024;
+export const MAX_SNAPSHOT_FILES = positiveEnvNumber("KIMI_CODE_WORKER_MAX_SNAPSHOT_FILES", 20_000);
+export const MAX_SNAPSHOT_CONTENT_BYTES = positiveEnvNumber("KIMI_CODE_WORKER_MAX_SNAPSHOT_CONTENT_BYTES", 50 * 1024 * 1024);
+export const MAX_PLAN_SANDBOX_FILES = positiveEnvNumber("KIMI_CODE_WORKER_MAX_PLAN_SANDBOX_FILES", 5_000);
+export const MAX_PLAN_SANDBOX_BYTES = positiveEnvNumber("KIMI_CODE_WORKER_MAX_PLAN_SANDBOX_BYTES", 25 * 1024 * 1024);
 export const MAX_DIFF_LINES = 2_000;
 export const MAX_DIFF_BYTES = 1 * 1024 * 1024;
 export const TOOLS_SCHEMA_BUDGET = 12_000;
@@ -73,6 +77,13 @@ export const PLATFORM_INSTALL_HINTS = {
 };
 
 export function positiveEnvMs(name, fallback) {
+  const raw = process.env[name];
+  if (raw == null || raw === "") return fallback;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+export function positiveEnvNumber(name, fallback) {
   const raw = process.env[name];
   if (raw == null || raw === "") return fallback;
   const value = Number(raw);

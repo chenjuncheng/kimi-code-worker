@@ -102,6 +102,14 @@ Plan mode runs in a temporary sandbox. If the plan mutates either the sandbox or
 
 ## Recommended Use
 
+Task routing:
+
+- Small fix: call `kimi_start_implementation` directly with narrow `allowed_dirs` and `checks`.
+- Cross-module or ambiguous work: call `kimi_plan_implementation` first, review only `current_slice`, then start execution.
+- Long task: split it into multiple slices. During execution, use short polling and avoid repeated logs/events.
+- Clear misdirection: prefer cancel and restart. Use `kimi_steer_job` only when the direction is mostly right and one correction is enough.
+- Failed result: rely on `failure_reason`, such as `checks_failed`, `changed_outside_allowed_scope`, `worker_failed`, or `worker_max_steps_reached`.
+
 Start a worker:
 
 ```json
@@ -148,11 +156,25 @@ On Windows, write `checks` as PowerShell-compatible commands when possible:
 }
 ```
 
+## Large Repositories And Long Tasks
+
+The MCP applies budgets to workspace snapshots and planning sandboxes so large repositories do not turn status checks into long blocking operations.
+
+Configurable environment variables:
+
+- `KIMI_CODE_WORKER_MAX_SNAPSHOT_FILES`
+- `KIMI_CODE_WORKER_MAX_SNAPSHOT_CONTENT_BYTES`
+- `KIMI_CODE_WORKER_MAX_PLAN_SANDBOX_FILES`
+- `KIMI_CODE_WORKER_MAX_PLAN_SANDBOX_BYTES`
+
+If a snapshot reaches its budget, `progress.facts` reports that explicitly. Terminal results include a `workspace_snapshot` summary so Codex can decide whether to rerun with narrower `allowed_dirs`.
+
 ## Smoke Tests
 
 ```bash
 npm run mcp:smoke:wire
 npm run mcp:smoke:workflow
+npm run mcp:smoke:edge
 ```
 
 ## Status

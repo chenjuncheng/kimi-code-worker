@@ -33,6 +33,10 @@ import {
   MAX_DIFF_LINES,
   MAX_FILE_BYTES,
   MAX_OUTPUT_CHARS,
+  MAX_PLAN_SANDBOX_BYTES,
+  MAX_PLAN_SANDBOX_FILES,
+  MAX_SNAPSHOT_CONTENT_BYTES,
+  MAX_SNAPSHOT_FILES,
   MAX_STREAM_EVENTS,
 } from "./core/config.mjs";
 import {
@@ -50,7 +54,8 @@ export class JobRuntime {
   async planImplementation(rawArgs) {
     const args = normalizePlanArgs(rawArgs);
     const before = snapshotWorkspace(args.cwd, args.ignored_dirs);
-    const sandbox_cwd = createPlanningSandbox(args.cwd, args.ignored_dirs);
+    const sandbox = createPlanningSandbox(args.cwd, args.ignored_dirs);
+    const sandbox_cwd = sandbox.path;
     const job = createJob({
       kind: "plan",
       cwd: args.cwd,
@@ -61,6 +66,7 @@ export class JobRuntime {
       forbiddenPaths: normalizeForbidden(args.cwd, args.forbidden_paths),
       ignored_dirs: args.ignored_dirs,
     });
+    job.planning_sandbox = sandbox.meta;
     this.jobs.set(job.id, job);
     persistJob(job);
     try {
@@ -312,9 +318,17 @@ async function runImplementationJob(job, args) {
   await backend.start();
   setPhase(job, "implementing", "Kimi is executing the current slice.");
   const prompt = buildImplementationPrompt(args, job.allowedRoots, job.forbiddenPaths, permissionProfile);
-  const workerResult = await backend.prompt(prompt);
-  await backend.close();
-  job.backend = null;
+  let workerResult;
+  let workerError = null;
+  try {
+    workerResult = await backend.prompt(prompt);
+  } catch (error) {
+    workerError = error;
+    workerResult = { status: "failed" };
+  } finally {
+    await backend.close();
+    job.backend = null;
+  }
 
   const after = snapshotWorkspace(args.cwd, args.ignored_dirs);
   const changes = diffSnapshots(job.before, after);
@@ -349,6 +363,7 @@ async function runImplementationJob(job, args) {
   const failedChecks = checks_run.filter((check) => check.exit_code !== 0 || check.timed_out);
   const terminal = classifyTerminal({
     worker_status: workerResult.status,
+    worker_error: workerError,
     changedFiles,
     policy,
     failedChecks,
@@ -364,7 +379,12 @@ async function runImplementationJob(job, args) {
     checks_run,
     requires_review: changedFiles.length > 0,
     failure_reason: terminal.failure_reason,
+    worker_error: workerError ? workerError.message : null,
     file_diffs,
+    workspace_snapshot: {
+      before: snapshotMeta(job.before),
+      after: snapshotMeta(after),
+    },
     codex_permission_profile: permissionProfile?.label ?? "unknown",
     completed_at: new Date().toISOString(),
     elapsed_ms: Date.now() - job.started_ms,
@@ -444,6 +464,7 @@ function createJob({ kind, cwd, model, checks, before, allowedRoots, forbiddenPa
     assistant_text: "",
     plan_display: null,
     status_update: null,
+    planning_sandbox: null,
     events: [],
     stdout_tail: "",
     stderr_tail: "",
@@ -459,6 +480,7 @@ function createJob({ kind, cwd, model, checks, before, allowedRoots, forbiddenPa
   };
   mkdirSync(jobDir(job), { recursive: true });
   writeFileSync(join(jobDir(job), "before-snapshot.json"), JSON.stringify([...before.entries()], null, 2));
+  job.snapshot = { before: snapshotMeta(before) };
   return job;
 }
 
@@ -484,6 +506,10 @@ function progressForJob(job) {
   }
   if (job.status_update?.context_tokens != null) {
     facts.push(`Context tokens reported: ${job.status_update.context_tokens}.`);
+  }
+  const beforeSnapshot = job.snapshot?.before;
+  if (beforeSnapshot?.truncated) {
+    facts.push(`Workspace snapshot reached its scan budget; ${beforeSnapshot.skipped_file_count} files were not tracked.`);
   }
 
   let weak_inference = "Recent activity suggests the run is still progressing, but these signals do not prove that it is on the right path.";
@@ -554,6 +580,8 @@ function resultForOutput(result, options = {}) {
       elapsed_ms: result.elapsed_ms ?? null,
       completed_at: result.completed_at ?? null,
       file_diffs: result.file_diffs ?? [],
+      worker_error: result.worker_error ?? null,
+      workspace_snapshot: result.workspace_snapshot ?? null,
     },
     options
   );
@@ -602,6 +630,8 @@ function persistJob(job) {
     ignored_dirs: job.ignored_dirs,
     status_update: job.status_update,
     current_check: job.current_check,
+    snapshot: job.snapshot,
+    planning_sandbox: job.planning_sandbox,
     last_event_summary: job.last_event_summary,
     codex_permission: job.codex_permission,
     permission_profile: job.permission_profile,
@@ -755,52 +785,107 @@ function normalizePath(path) {
 
 function snapshotWorkspace(cwd, ignoredDirs) {
   const files = new Map();
-  visitDirectory(cwd, cwd, new Set(ignoredDirs), files);
+  const meta = createSnapshotMeta();
+  visitDirectory(cwd, cwd, new Set(ignoredDirs), files, meta);
+  files.meta = meta;
   return files;
 }
 
 function createPlanningSandbox(cwd, ignoredDirs) {
   const sandbox = join(tmpdir(), `kimi-code-worker-plan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   mkdirSync(sandbox, { recursive: true });
-  copyWorkspace(cwd, sandbox, new Set(ignoredDirs));
-  return sandbox;
+  const meta = createCopyMeta();
+  copyWorkspace(cwd, sandbox, new Set(ignoredDirs), meta);
+  return { path: sandbox, meta };
 }
 
-function copyWorkspace(source, target, ignoredDirs) {
+function copyWorkspace(source, target, ignoredDirs, meta) {
   for (const entry of readdirSync(source, { withFileTypes: true })) {
     if (entry.name === "." || entry.name === "..") continue;
     const sourcePath = join(source, entry.name);
     const targetPath = join(target, entry.name);
     if (entry.isDirectory()) {
-      if (ignoredDirs.has(entry.name)) continue;
+      if (ignoredDirs.has(entry.name)) {
+        meta.ignored_dir_count++;
+        continue;
+      }
       mkdirSync(targetPath, { recursive: true });
-      copyWorkspace(sourcePath, targetPath, ignoredDirs);
+      copyWorkspace(sourcePath, targetPath, ignoredDirs, meta);
       continue;
     }
     if (!entry.isFile()) continue;
+    const stat = statSync(sourcePath);
+    if (meta.file_count >= MAX_PLAN_SANDBOX_FILES || meta.bytes_copied + stat.size > MAX_PLAN_SANDBOX_BYTES) {
+      meta.truncated = true;
+      meta.skipped_file_count++;
+      continue;
+    }
     writeFileSync(targetPath, readFileSync(sourcePath));
+    meta.file_count++;
+    meta.bytes_copied += stat.size;
   }
 }
 
-function visitDirectory(root, current, ignoredDirs, output) {
+function visitDirectory(root, current, ignoredDirs, output, meta) {
   for (const entry of readdirSync(current, { withFileTypes: true })) {
     if (entry.isDirectory()) {
-      if (ignoredDirs.has(entry.name)) continue;
-      visitDirectory(root, join(current, entry.name), ignoredDirs, output);
+      if (ignoredDirs.has(entry.name)) {
+        meta.ignored_dir_count++;
+        continue;
+      }
+      visitDirectory(root, join(current, entry.name), ignoredDirs, output, meta);
       continue;
     }
     if (!entry.isFile()) continue;
+    if (meta.file_count >= MAX_SNAPSHOT_FILES) {
+      meta.truncated = true;
+      meta.skipped_file_count++;
+      continue;
+    }
     const absolute = join(current, entry.name);
     const relativePath = relative(root, absolute).split("\\").join("/");
     const stat = statSync(absolute);
-    const content = stat.size <= MAX_FILE_BYTES ? readFileSync(absolute) : null;
+    const canReadContent = stat.size <= MAX_FILE_BYTES && meta.content_bytes + stat.size <= MAX_SNAPSHOT_CONTENT_BYTES;
+    const content = canReadContent ? readFileSync(absolute) : null;
+    if (content == null) meta.content_skipped_count++;
+    else meta.content_bytes += stat.size;
     const hash = createHash("sha1").update(content ?? `${stat.size}:${stat.mtimeMs}`).digest("hex");
     output.set(relativePath, {
       size: stat.size,
       hash,
       content: content == null ? null : content.toString("utf8"),
     });
+    meta.file_count++;
   }
+}
+
+function createSnapshotMeta() {
+  return {
+    file_count: 0,
+    content_bytes: 0,
+    content_skipped_count: 0,
+    skipped_file_count: 0,
+    ignored_dir_count: 0,
+    truncated: false,
+    max_files: MAX_SNAPSHOT_FILES,
+    max_content_bytes: MAX_SNAPSHOT_CONTENT_BYTES,
+  };
+}
+
+function createCopyMeta() {
+  return {
+    file_count: 0,
+    bytes_copied: 0,
+    skipped_file_count: 0,
+    ignored_dir_count: 0,
+    truncated: false,
+    max_files: MAX_PLAN_SANDBOX_FILES,
+    max_bytes: MAX_PLAN_SANDBOX_BYTES,
+  };
+}
+
+function snapshotMeta(snapshot) {
+  return snapshot?.meta ?? null;
 }
 
 function diffSnapshots(before, after) {
@@ -881,7 +966,13 @@ function isInside(target, root) {
   return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}${sep}`);
 }
 
-function classifyTerminal({ worker_status, changedFiles, policy, failedChecks }) {
+function classifyTerminal({ worker_status, worker_error, changedFiles, policy, failedChecks }) {
+  if (worker_error || worker_status === "failed") {
+    return { ok: false, status: "failed", failure_reason: "worker_failed" };
+  }
+  if (worker_status === "max_steps_reached") {
+    return { ok: false, status: "failed", failure_reason: "worker_max_steps_reached" };
+  }
   if (worker_status === "cancelled") {
     if (changedFiles.length > 0) {
       return { ok: false, status: "partial_cancelled", failure_reason: "cancelled_after_changes" };

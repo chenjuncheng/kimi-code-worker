@@ -148,6 +148,23 @@ async function runPrompt(turn) {
     return;
   }
 
+  if (turn.userInput.includes("FAIL_CHECK")) {
+    writeFileSync(join(cwd, "hello.txt"), "wrong content\n");
+    event("ContentPart", { type: "text", text: "Implementation finished with intentionally wrong content." });
+    respond(turn.id, { status: "finished" });
+    event("TurnEnd", {});
+    running = null;
+    return;
+  }
+
+  if (turn.userInput.includes("MAX_STEPS")) {
+    event("ContentPart", { type: "text", text: "Stopping after max steps." });
+    respond(turn.id, { status: "max_steps_reached", steps: 99 });
+    event("TurnEnd", {});
+    running = null;
+    return;
+  }
+
   mkdirSync(join(cwd, "src"), { recursive: true });
   writeFileSync(join(cwd, "src", "worker-prompt.txt"), turn.userInput);
   if (turn.userInput.includes("MAKE_HELLO")) {
