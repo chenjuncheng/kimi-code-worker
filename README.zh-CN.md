@@ -93,6 +93,29 @@ startup_timeout_sec = 120
 
 本地开发如果不使用 `npm link`，也可以直接用 `node src/kimi-code-worker-mcp.mjs` 或 `npm run mcp:start`。
 
+## 仓库内 Skill
+
+本仓库还内置了一个 Codex skill，路径是：
+
+```text
+skills/codex-kimi-code-worker
+```
+
+仓库公开后，可以按 GitHub repo path 安装：
+
+```bash
+python ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py --repo chenjuncheng/kimi-code-worker --path skills/codex-kimi-code-worker
+```
+
+安装完 skill 后，重启 Codex 才会加载新的 skill。
+
+这个 skill 固化两类能力：
+
+- Kimi Code CLI 和 `kimi-code-worker-mcp` 的安装与体检
+- `plan -> start -> short wait -> get -> terminal review` 的 worker 工作流指引
+
+Codex 重启后，当前线程不会自动恢复之前的 MCP 连接。正确做法是新开一个会话，再次调用 `$codex-kimi-code-worker`。
+
 ## 权限继承
 
 启动时，MCP 会读取 `CODEX_THREAD_ID`，然后去 `~/.codex/.codex-global-state.json` 查当前线程的权限策略。

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Kimi Code Worker"
+  short_description: "安装并运行 Codex 指挥 Kimi 的低 token worker 流程"
+  default_prompt: "Use $codex-kimi-code-worker to install or validate Kimi Code + kimi-code-worker-mcp, then run a scoped Kimi worker slice with compact polling and terminal review."

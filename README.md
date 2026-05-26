@@ -93,6 +93,29 @@ startup_timeout_sec = 120
 
 For local development without `npm link`, use `node src/kimi-code-worker-mcp.mjs` or `npm run mcp:start`.
 
+## Bundled Skill
+
+This repository also bundles a Codex skill at:
+
+```text
+skills/codex-kimi-code-worker
+```
+
+Install it from a GitHub repo path after you publish the repository:
+
+```bash
+python ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py --repo chenjuncheng/kimi-code-worker --path skills/codex-kimi-code-worker
+```
+
+After installing the skill, restart Codex to pick up new skills.
+
+The skill handles two jobs:
+
+- onboarding for Kimi Code CLI and `kimi-code-worker-mcp`
+- operational guidance for the `plan -> start -> short wait -> get -> terminal review` worker flow
+
+After a Codex restart, open a new thread and invoke `$codex-kimi-code-worker` again. Codex does not automatically restore the previous thread's MCP connection across restart.
+
 ## Permission Inheritance
 
 At startup, the MCP reads the current Codex thread id from `CODEX_THREAD_ID` and looks up the thread policy in `~/.codex/.codex-global-state.json`.
