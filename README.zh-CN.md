@@ -17,7 +17,7 @@
 一句话安装提示，直接发给你的 Codex：
 
 ```text
-从 `chenjuncheng/kimi-code-worker` 安装 `codex-kimi-code-worker` skill 和 `kimi-code-worker-mcp`，完成 Kimi 登录和 hello world 验证，写入 `~/.codex/config.toml`，然后提醒我重启 Codex。
+从 `chenjuncheng/kimi-code-worker` 的 `master` 分支安装 `codex-kimi-code-worker` skill 和 `kimi-code-worker-mcp`，完成 Kimi 登录和 hello world 验证，给 Codex 注册 MCP，然后提醒我重启 Codex。
 ```
 
 ## 它做什么
@@ -140,7 +140,7 @@ skills/codex-kimi-code-worker
 仓库公开后，可以按 GitHub repo path 安装：
 
 ```bash
-python ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py --repo chenjuncheng/kimi-code-worker --path skills/codex-kimi-code-worker
+python ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py --repo chenjuncheng/kimi-code-worker --ref master --path skills/codex-kimi-code-worker
 ```
 
 安装完 skill 后，重启 Codex 才会加载新的 skill。

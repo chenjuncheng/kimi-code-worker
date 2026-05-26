@@ -17,7 +17,7 @@ This project is optimized for lower Codex main-thread token usage on suitable co
 One-line install prompt for Codex:
 
 ```text
-Install the `codex-kimi-code-worker` skill and `kimi-code-worker-mcp` from `chenjuncheng/kimi-code-worker`, verify Kimi login and a hello-world call, write `~/.codex/config.toml`, then tell me to restart Codex.
+Install the `codex-kimi-code-worker` skill and `kimi-code-worker-mcp` from `chenjuncheng/kimi-code-worker` using branch `master`, verify Kimi login and a hello-world call, register the MCP for Codex, then tell me to restart Codex.
 ```
 
 ## What It Does
@@ -140,7 +140,7 @@ skills/codex-kimi-code-worker
 Install it from a GitHub repo path after you publish the repository:
 
 ```bash
-python ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py --repo chenjuncheng/kimi-code-worker --path skills/codex-kimi-code-worker
+python ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py --repo chenjuncheng/kimi-code-worker --ref master --path skills/codex-kimi-code-worker
 ```
 
 After installing the skill, restart Codex to pick up new skills.
