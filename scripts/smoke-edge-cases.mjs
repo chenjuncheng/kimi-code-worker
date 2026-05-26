@@ -1,7 +1,11 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { JobRuntime } from "../src/job-runtime.mjs";
+
+process.env.KIMI_CODE_WORKER_PROTOCOL_UNSETTLED_AFTER_MS = "300";
+process.env.KIMI_CODE_WORKER_TOOL_CALL_PART_BURST_MIN = "3";
+
+const { JobRuntime } = await import("../src/job-runtime.mjs");
 
 const cwd = join(tmpdir(), `kimi-code-worker-edge-smoke-${Date.now()}`);
 mkdirSync(cwd, { recursive: true });
@@ -42,13 +46,48 @@ try {
   const steerTerminal = await runToTerminal(longStart);
   const steerContent = readFileSync(join(cwd, "src", "long-run.txt"), "utf8");
 
-  const compact = runtime.getJob({ job_id: steerTerminal.job_id });
+  const protocolTimeoutStart = await runtime.startImplementation({
+    cwd,
+    kimi_bin,
+    task: "TOOLCALL_TIMEOUT: keep streaming ToolCallPart fragments without settling the prompt.",
+    allowed_dirs: ["src"],
+    timeout_ms: 1_200,
+  });
+  await sleep(700);
+  const protocolProgress = await runtime.getJob({ job_id: protocolTimeoutStart.job_id });
+  const protocolTimeoutTerminal = await runToTerminal(protocolTimeoutStart);
+
+  const orphanedStart = await runtime.startImplementation({
+    cwd,
+    kimi_bin,
+    task: "LONG_RUNNING: create a long-running file so we can simulate orphaned reconciliation.",
+    allowed_dirs: ["src"],
+  });
+  await sleep(300);
+  const orphanedJob = runtime.jobs.get(orphanedStart.job_id);
+  writeFileSync(join(cwd, "src", "orphaned.txt"), "reconcile me\n");
+  orphanedJob.process_alive = false;
+  orphanedJob.backend = null;
+  orphanedJob.status = "running";
+  orphanedJob.stage = "implementing";
+  orphanedJob.updated_at = new Date().toISOString();
+  const orphanedTerminal = await runtime.getJob({ job_id: orphanedStart.job_id });
+
+  const compact = await runtime.getJob({ job_id: steerTerminal.job_id });
   const snapshot = compact.result?.workspace_snapshot;
   const checks = {
     failed_check_classified: failedCheck.status === "failed" && failedCheck.result?.failure_reason === "checks_failed",
     max_steps_classified: maxSteps.status === "failed" && maxSteps.result?.failure_reason === "worker_max_steps_reached",
     steer_acknowledged: steered.status === "steered",
     steer_changed_worker_output: steerTerminal.status === "completed" && steerContent.includes("steered:Use the steered branch."),
+    protocol_stall_visible_while_running: protocolProgress.status === "running"
+      && protocolProgress.progress?.suspected_stall === true
+      && protocolProgress.progress?.stall_reason === "protocol_not_settled",
+    protocol_timeout_classified: protocolTimeoutTerminal.status === "failed"
+      && protocolTimeoutTerminal.result?.failure_reason === "worker_protocol_timeout",
+    orphaned_job_reconciled: orphanedTerminal.status === "completed"
+      && orphanedTerminal.result?.worker_exit_without_terminal_event === true
+      && orphanedTerminal.result?.recovered_from_failure_reason === "worker_exited_without_terminal_event",
     snapshot_meta_present: snapshot?.before?.file_count > 0 && snapshot?.after?.file_count > 0,
     compact_result_has_no_diff: !hasKeyDeep(compact, "file_diffs"),
   };

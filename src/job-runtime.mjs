@@ -21,6 +21,7 @@ import {
   DEFAULT_IDLE_AFTER_MS,
   DEFAULT_IGNORED_DIRS,
   DEFAULT_PLAN_TIMEOUT_MS,
+  DEFAULT_PROTOCOL_UNSETTLED_AFTER_MS,
   DEFAULT_RECOMMENDED_POLL_INTERVAL_MS,
   DEFAULT_RECOMMENDED_WAIT_MS,
   DEFAULT_STALL_AFTER_MS,
@@ -38,6 +39,7 @@ import {
   MAX_SNAPSHOT_CONTENT_BYTES,
   MAX_SNAPSHOT_FILES,
   MAX_STREAM_EVENTS,
+  TOOL_CALL_PART_BURST_MIN,
 } from "./core/config.mjs";
 import {
   inferPermissionProfile,
@@ -107,6 +109,7 @@ export class JobRuntime {
       ignored_dirs: args.ignored_dirs,
     });
     job.stage = "queued";
+    job.check_timeout_ms = args.check_timeout_ms;
     this.jobs.set(job.id, job);
     persistJob(job);
     job.promise = runImplementationJob(job, args).catch((error) => {
@@ -123,16 +126,17 @@ export class JobRuntime {
     };
   }
 
-  getJob(rawArgs) {
+  async getJob(rawArgs) {
     const args = outputOptions(rawArgs);
     const job = this.jobs.get(rawArgs.job_id);
     if (!job) return { status: "not_found", job_id: rawArgs.job_id };
+    await reconcileDeadJobIfNeeded(job);
     return serializeJob(job, args);
   }
 
-  waitForJob(rawArgs) {
+  async waitForJob(rawArgs) {
     const job = this.jobs.get(rawArgs.job_id);
-    if (!job) return Promise.resolve({ status: "not_found", job_id: rawArgs.job_id });
+    if (!job) return { status: "not_found", job_id: rawArgs.job_id };
     const options = outputOptions(rawArgs);
     const waitRequested = rawArgs.max_wait_ms != null;
     const requestedMaxWaitMs = waitRequested
@@ -143,9 +147,13 @@ export class JobRuntime {
     const timeoutGuardMs = waitRequested ? waitReturnGuardMs(cappedMaxWaitMs) : 0;
     const maxWaitMs = Math.max(0, cappedMaxWaitMs - timeoutGuardMs);
     const startedMs = Date.now();
-    return new Promise((resolvePromise) => {
-      const finish = () => {
-        const output = {
+    while (true) {
+      await reconcileDeadJobIfNeeded(job);
+      if (job.status === "completed" || job.status === "failed" || job.status === "cancel_requested") {
+        return serializeJob(job, options);
+      }
+      if (!waitRequested || maxWaitMs <= 0 || Date.now() - startedMs >= maxWaitMs) {
+        return stripLargeEvidence({
           status: "running",
           reason: !waitRequested
             ? "no_wait_requested"
@@ -162,34 +170,10 @@ export class JobRuntime {
           progress: progressForJob(job),
           result: resultForOutput(job.result, options),
           error: job.error ?? null,
-        };
-        resolvePromise(stripLargeEvidence(output, options));
-      };
-
-      const decide = () => {
-        if (job.status === "completed" || job.status === "failed" || job.status === "cancel_requested") {
-          resolvePromise(serializeJob(job, options));
-          return true;
-        }
-        return false;
-      };
-
-      if (decide()) return;
-      if (!waitRequested || maxWaitMs <= 0) {
-        finish();
-        return;
+        }, options);
       }
-      const timer = setInterval(() => {
-        if (decide()) {
-          clearInterval(timer);
-          return;
-        }
-        if (Date.now() - startedMs >= maxWaitMs) {
-          clearInterval(timer);
-          finish();
-        }
-      }, Math.max(25, pollIntervalMs));
-    });
+      await sleep(Math.max(25, pollIntervalMs));
+    }
   }
 
   async steerJob(rawArgs) {
@@ -329,68 +313,16 @@ async function runImplementationJob(job, args) {
     await backend.close();
     job.backend = null;
   }
-
-  const after = snapshotWorkspace(args.cwd, args.ignored_dirs);
-  const changes = diffSnapshots(job.before, after);
-  const changedFiles = changes.map((change) => change.path).sort();
-  const policy = evaluatePolicy({
-    cwd: args.cwd,
-    changedFiles,
-    allowedRoots: job.allowedRoots,
-    forbiddenPaths: job.forbiddenPaths,
-  });
-
-  const checks_run = [];
-  if (changedFiles.length > 0 && policy.ok && args.checks.length > 0) {
-    setPhase(job, "checking", "Workspace changed; running authoritative host-side checks.");
-    for (const [index, command] of args.checks.entries()) {
-      job.current_check = {
-        index,
-        total: args.checks.length,
-        command,
-        started_at_ms: Date.now(),
-      };
-      persistJob(job);
-      const checked = await runCheck(args.cwd, command, args.check_timeout_ms);
-      checks_run.push(checked);
-      markMeaningfulActivity(job, checked.exit_code === 0 && !checked.timed_out ? "check_passed" : "check_failed");
-      job.current_check = null;
-      persistJob(job);
-    }
+  job.finalizing = true;
+  try {
+    await finalizeImplementationJob(job, args, {
+      workerResult,
+      workerError,
+      permissionProfile,
+    });
+  } finally {
+    job.finalizing = false;
   }
-
-  const file_diffs = computeFileDiffs(job.before, after, changes);
-  const failedChecks = checks_run.filter((check) => check.exit_code !== 0 || check.timed_out);
-  const terminal = classifyTerminal({
-    worker_status: workerResult.status,
-    worker_error: workerError,
-    changedFiles,
-    policy,
-    failedChecks,
-  });
-
-  job.status = terminal.ok ? "completed" : terminal.status === "cancel_requested" ? "cancel_requested" : "failed";
-  job.stage = job.status === "completed" ? "completed" : "failed";
-  job.result = {
-    status: terminal.status,
-    files_changed: changedFiles,
-    change_count: changedFiles.length,
-    policy,
-    checks_run,
-    requires_review: changedFiles.length > 0,
-    failure_reason: terminal.failure_reason,
-    worker_error: workerError ? workerError.message : null,
-    file_diffs,
-    workspace_snapshot: {
-      before: snapshotMeta(job.before),
-      after: snapshotMeta(after),
-    },
-    codex_permission_profile: permissionProfile?.label ?? "unknown",
-    completed_at: new Date().toISOString(),
-    elapsed_ms: Date.now() - job.started_ms,
-  };
-  job.updated_at = new Date().toISOString();
-  persistJob(job);
 }
 
 function createBackend(job, args) {
@@ -477,6 +409,9 @@ function createJob({ kind, cwd, model, checks, before, allowedRoots, forbiddenPa
     promise: null,
     codex_permission: null,
     permission_profile: null,
+    check_timeout_ms: null,
+    finalizing: false,
+    reconcile_promise: null,
   };
   mkdirSync(jobDir(job), { recursive: true });
   writeFileSync(join(jobDir(job), "before-snapshot.json"), JSON.stringify([...before.entries()], null, 2));
@@ -495,7 +430,12 @@ function setPhase(job, stage, message) {
 function progressForJob(job) {
   const elapsedMs = Date.now() - job.started_ms;
   const idleMs = Date.now() - job.last_meaningful_activity_ms;
-  const suspected_stall = job.status === "running" && idleMs >= DEFAULT_STALL_AFTER_MS;
+  const protocolState = protocolUnsettledState(job);
+  const idleStall = job.status === "running" && idleMs >= DEFAULT_STALL_AFTER_MS;
+  const suspected_stall = idleStall || protocolState.unsettled;
+  const stall_reason = protocolState.unsettled
+    ? "protocol_not_settled"
+    : idleStall ? "no_meaningful_activity" : null;
   const facts = [
     `Current stage: ${job.stage}.`,
     `Elapsed time: ${elapsedMs} ms.`,
@@ -507,6 +447,12 @@ function progressForJob(job) {
   if (job.status_update?.context_tokens != null) {
     facts.push(`Context tokens reported: ${job.status_update.context_tokens}.`);
   }
+  if (protocolState.unsettled) {
+    facts.push(`Consecutive ToolCallPart events: ${protocolState.count} over ${protocolState.duration_ms} ms without a settled prompt response.`);
+  }
+  if (job.status === "running" && job.kind === "implementation" && job.process_alive === false) {
+    facts.push("Worker process is no longer alive while the job is still marked running.");
+  }
   const beforeSnapshot = job.snapshot?.before;
   if (beforeSnapshot?.truncated) {
     facts.push(`Workspace snapshot reached its scan budget; ${beforeSnapshot.skipped_file_count} files were not tracked.`);
@@ -515,15 +461,23 @@ function progressForJob(job) {
   let weak_inference = "Recent activity suggests the run is still progressing, but these signals do not prove that it is on the right path.";
   if (job.status !== "running") {
     weak_inference = "The job reached a terminal state. Final acceptance should be based on result, policy, checks, and optional diff review.";
-  } else if (suspected_stall) {
+  } else if (protocolState.unsettled) {
+    weak_inference = `Kimi is still emitting ToolCallPart fragments after ${protocolState.duration_ms} ms, but the prompt has not settled. This suggests a protocol-level stall, not proven forward progress.`;
+  } else if (idleStall) {
     weak_inference = `No meaningful activity has been observed for ${idleMs} ms. This suggests the run may be stalled, but it does not prove failure.`;
+  } else if (job.kind === "implementation" && job.process_alive === false) {
+    weak_inference = "The worker process appears to have exited without terminal reconciliation yet. The MCP may still need to reconcile outputs and checks.";
   } else if (job.stage === "checking") {
     weak_inference = "The run has reached host-side validation. This suggests coding has paused, but the final acceptance still depends on check results.";
   }
 
   let next_action = "Continue short polling with kimi_get_job. Use kimi_wait_for_job only for another short observation window.";
-  if (suspected_stall) {
+  if (protocolState.unsettled) {
+    next_action = "Fetch include_logs or include_events once for protocol evidence. If the next short poll shows the same unsettled stream, cancel and restart with a narrower slice.";
+  } else if (idleStall) {
     next_action = "Fetch include_logs or include_events once for stronger evidence. Cancel and restart only if the task boundary now looks wrong.";
+  } else if (job.kind === "implementation" && job.process_alive === false && job.status === "running") {
+    next_action = "Reconcile outputs and host checks now. Do not keep waiting on a worker process that is already gone.";
   } else if (job.status !== "running") {
     next_action = "Inspect the terminal summary. Request include_diff only if final review needs file-level evidence.";
   }
@@ -536,6 +490,7 @@ function progressForJob(job) {
     weak_inference,
     next_action,
     suspected_stall,
+    stall_reason,
     checks_progress: job.current_check ? {
       current: job.current_check.index + 1,
       total: job.current_check.total,
@@ -581,6 +536,13 @@ function resultForOutput(result, options = {}) {
       completed_at: result.completed_at ?? null,
       file_diffs: result.file_diffs ?? [],
       worker_error: result.worker_error ?? null,
+      worker_timeout_context: result.worker_timeout_context ?? null,
+      useful_outputs_present: Boolean(result.useful_outputs_present),
+      produced_files: result.produced_files ?? [],
+      contract_failed_on: result.contract_failed_on ?? [],
+      worker_exit_without_terminal_event: Boolean(result.worker_exit_without_terminal_event),
+      recovered_from_failure_reason: result.recovered_from_failure_reason ?? null,
+      reconciliation_reason: result.reconciliation_reason ?? null,
       workspace_snapshot: result.workspace_snapshot ?? null,
     },
     options
@@ -639,6 +601,46 @@ function persistJob(job) {
     error: job.error,
   };
   writeFileSync(join(jobDir(job), "status.json"), JSON.stringify(payload, null, 2));
+}
+
+async function reconcileDeadJobIfNeeded(job) {
+  if (!job || job.kind !== "implementation") return;
+  if (job.status !== "running") return;
+  if (job.process_alive !== false) return;
+  if (job.backend) return;
+  if (job.finalizing) return;
+  if (job.reconcile_promise) {
+    await job.reconcile_promise;
+    return;
+  }
+  const args = {
+    cwd: job.cwd,
+    ignored_dirs: job.ignored_dirs,
+    checks: job.checks ?? [],
+    check_timeout_ms: job.check_timeout_ms ?? DEFAULT_CHECK_TIMEOUT_MS,
+  };
+  job.reconcile_promise = (async () => {
+    job.finalizing = true;
+    try {
+      await finalizeImplementationJob(job, args, {
+        workerResult: { status: "failed" },
+        workerError: new Error("Kimi worker process exited without a terminal prompt response."),
+        permissionProfile: job.permission_profile,
+        reconciliation_reason: "worker_exit_without_terminal_event",
+        worker_exit_without_terminal_event: true,
+      });
+    } catch (error) {
+      job.status = "failed";
+      job.stage = "failed";
+      job.error = { message: error.message };
+      job.updated_at = new Date().toISOString();
+      persistJob(job);
+    } finally {
+      job.finalizing = false;
+      job.reconcile_promise = null;
+    }
+  })();
+  await job.reconcile_promise;
 }
 
 function appendEvent(job, type, summary, raw) {
@@ -966,8 +968,126 @@ function isInside(target, root) {
   return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}${sep}`);
 }
 
+async function finalizeImplementationJob(job, args, {
+  workerResult,
+  workerError,
+  permissionProfile,
+  reconciliation_reason = null,
+  worker_exit_without_terminal_event = false,
+} = {}) {
+  if (job.result && (job.status === "completed" || job.status === "failed" || job.status === "cancel_requested")) {
+    return job.result;
+  }
+  if (reconciliation_reason) {
+    setPhase(job, "reconciling", "Worker process exited; reconciling outputs and authoritative checks.");
+  }
+
+  const after = snapshotWorkspace(args.cwd, args.ignored_dirs);
+  const changes = diffSnapshots(job.before, after);
+  const changedFiles = changes.map((change) => change.path).sort();
+  const policy = evaluatePolicy({
+    cwd: args.cwd,
+    changedFiles,
+    allowedRoots: job.allowedRoots,
+    forbiddenPaths: job.forbiddenPaths,
+  });
+
+  const checks_run = [];
+  if (changedFiles.length > 0 && policy.ok && args.checks.length > 0) {
+    setPhase(job, "checking", "Workspace changed; running authoritative host-side checks.");
+    for (const [index, command] of args.checks.entries()) {
+      job.current_check = {
+        index,
+        total: args.checks.length,
+        command,
+        started_at_ms: Date.now(),
+      };
+      persistJob(job);
+      const checked = await runCheck(args.cwd, command, args.check_timeout_ms);
+      checks_run.push(checked);
+      markMeaningfulActivity(job, checked.exit_code === 0 && !checked.timed_out ? "check_passed" : "check_failed");
+      job.current_check = null;
+      persistJob(job);
+    }
+  }
+
+  const file_diffs = computeFileDiffs(job.before, after, changes);
+  const failedChecks = checks_run.filter((check) => check.exit_code !== 0 || check.timed_out);
+  const protocolState = protocolUnsettledState(job);
+  const contract_failed_on = [];
+  if (policy.scope_violation) contract_failed_on.push("allowed_scope");
+  if (policy.forbidden_violation) contract_failed_on.push("forbidden_paths");
+  if (failedChecks.length > 0) contract_failed_on.push("checks");
+  const useful_outputs_present = changedFiles.length > 0;
+  const terminal = classifyTerminal({
+    worker_status: worker_exit_without_terminal_event ? "exited_without_terminal_event" : workerResult?.status,
+    worker_error: workerError,
+    changedFiles,
+    policy,
+    failedChecks,
+  });
+
+  job.status = terminal.ok ? "completed" : terminal.status === "cancel_requested" ? "cancel_requested" : "failed";
+  job.stage = job.status === "completed" ? "completed" : "failed";
+  job.result = {
+    status: terminal.status,
+    files_changed: changedFiles,
+    change_count: changedFiles.length,
+    policy,
+    checks_run,
+    requires_review: changedFiles.length > 0,
+    failure_reason: terminal.failure_reason,
+    worker_error: workerError ? workerError.message : null,
+    worker_timeout_context: isPromptTimeoutError(workerError) ? {
+      recent_signal: job.last_event_summary,
+      tool_call_part_burst: protocolState.count,
+      tool_call_part_burst_ms: protocolState.duration_ms,
+      protocol_unsettled: protocolState.unsettled,
+    } : null,
+    useful_outputs_present,
+    produced_files: changedFiles,
+    contract_failed_on,
+    worker_exit_without_terminal_event,
+    recovered_from_failure_reason: terminal.recovered_from_failure_reason ?? null,
+    reconciliation_reason,
+    file_diffs,
+    workspace_snapshot: {
+      before: snapshotMeta(job.before),
+      after: snapshotMeta(after),
+    },
+    codex_permission_profile: permissionProfile?.label ?? job.permission_profile?.label ?? "unknown",
+    completed_at: new Date().toISOString(),
+    elapsed_ms: Date.now() - job.started_ms,
+  };
+  job.updated_at = new Date().toISOString();
+  persistJob(job);
+  return job.result;
+}
+
 function classifyTerminal({ worker_status, worker_error, changedFiles, policy, failedChecks }) {
+  if (worker_status === "exited_without_terminal_event") {
+    if (changedFiles.length > 0 && policy.ok && failedChecks.length === 0) {
+      return {
+        ok: true,
+        status: "changed_files",
+        failure_reason: null,
+        recovered_from_failure_reason: "worker_exited_without_terminal_event",
+      };
+    }
+    return { ok: false, status: "failed", failure_reason: "worker_exited_without_terminal_event" };
+  }
   if (worker_error || worker_status === "failed") {
+    if (isPromptTimeoutError(worker_error)) {
+      if (changedFiles.length > 0 && policy.ok && failedChecks.length === 0) {
+        return {
+          ok: true,
+          status: "changed_files",
+          failure_reason: null,
+          recovered_from_failure_reason: "worker_protocol_timeout",
+        };
+      }
+      return { ok: false, status: "failed", failure_reason: "worker_protocol_timeout" };
+    }
     return { ok: false, status: "failed", failure_reason: "worker_failed" };
   }
   if (worker_status === "max_steps_reached") {
@@ -1106,12 +1226,54 @@ function buildImplementationPrompt(args, allowedRoots, forbiddenPaths, permissio
     "Execute only this slice.",
     "Do not broaden scope. If more work remains, stop after this slice and leave the remaining work for Codex to schedule.",
     "Final checks are run once by the MCP. Do not repeat the caller's final checks unless they are required to understand the bug.",
+    "For structured outputs larger than a few KB, write a short local Python or shell script that generates the file. Do not stream large JSON or Markdown payloads argument-by-argument.",
+    "If the task naturally splits into fetch, normalize, and document stages, complete only the current stage in this slice.",
+    "If the required artifacts for this slice are already written and the slice objective is satisfied, stop immediately. Do not keep thinking after the final artifacts are in place.",
     `Task: ${args.task}`,
     `CWD: ${args.cwd}`,
     `Allowed scope: ${allowedRoots.map((root) => relative(args.cwd, root) || ".").join(", ")}`,
     `Forbidden paths: ${forbiddenPaths.map((path) => relative(args.cwd, path) || ".").join(", ") || "(none)"}`,
     "After you finish the slice, stop cleanly.",
   ].join("\n");
+}
+
+function protocolUnsettledState(job) {
+  if (job.status !== "running" && job.status !== "failed") {
+    return { unsettled: false, count: 0, duration_ms: 0 };
+  }
+  const burst = trailingToolCallPartBurst(job.events);
+  if (!burst) return { unsettled: false, count: 0, duration_ms: 0 };
+  const unsettled = burst.count >= TOOL_CALL_PART_BURST_MIN && burst.duration_ms >= DEFAULT_PROTOCOL_UNSETTLED_AFTER_MS;
+  return {
+    unsettled,
+    count: burst.count,
+    duration_ms: burst.duration_ms,
+  };
+}
+
+function trailingToolCallPartBurst(events) {
+  if (!Array.isArray(events) || events.length === 0) return null;
+  let count = 0;
+  let firstAt = null;
+  let lastAt = null;
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.type !== "ToolCallPart") break;
+    count += 1;
+    firstAt = event.at;
+    if (lastAt == null) lastAt = event.at;
+  }
+  if (count === 0 || !firstAt || !lastAt) return null;
+  const firstMs = Date.parse(firstAt);
+  const lastMs = Date.parse(lastAt);
+  return {
+    count,
+    duration_ms: Number.isFinite(firstMs) && Number.isFinite(lastMs) ? Math.max(0, lastMs - firstMs) : 0,
+  };
+}
+
+function isPromptTimeoutError(error) {
+  return typeof error?.message === "string" && /Timed out waiting for Wire response: prompt/i.test(error.message);
 }
 
 function parsePlanOutput(text) {

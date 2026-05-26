@@ -48,6 +48,7 @@ const terminal = await tool("kimi_wait_for_job", {
   max_wait_ms: 5000,
   poll_interval_ms: 50,
 });
+const workerPrompt = readFileSync(join(cwd, "src", "worker-prompt.txt"), "utf8");
 const compact = await tool("kimi_get_job", { job_id: start.job_id });
 const verbose = await tool("kimi_get_job", { job_id: start.job_id, include_diff: true, include_logs: true, include_events: true });
 
@@ -79,6 +80,8 @@ const checks = {
   implementation_completed: terminal.status === "completed" && compact.result?.status === "changed_files",
   implementation_inherits_permission: compact.result?.codex_permission_profile === "full-access",
   check_ran_once: existsSync(checkFile) && readFileSync(checkFile, "utf8") === "1",
+  prompt_prefers_scripted_large_outputs: workerPrompt.includes("write a short local Python or shell script"),
+  prompt_has_stop_rule: workerPrompt.includes("stop immediately") && workerPrompt.includes("Do not keep thinking"),
   default_get_is_compact: !hasKeyDeep(compact, "stdout_tail") && !hasKeyDeep(compact, "recent_events") && !hasKeyDeep(compact, "file_diffs"),
   verbose_get_has_evidence: hasKeyDeep(verbose, "stdout_tail") && hasKeyDeep(verbose, "recent_events") && hasKeyDeep(verbose, "file_diffs"),
   steer_acknowledged: steered.status === "steered",

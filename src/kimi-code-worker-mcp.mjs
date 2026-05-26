@@ -136,7 +136,7 @@ async function runMcpServer() {
       inputSchema: getSchema,
       outputSchema,
     },
-    async (args) => toolResult(runtime.getJob(args))
+    async (args) => toolResult(await runtime.getJob(args))
   );
 
   server.registerTool(

@@ -18,7 +18,7 @@ const SANDBOX_ALIASES = new Map([
 ]);
 
 export function readCodexPermissionContext(threadId = process.env.CODEX_THREAD_ID) {
-  if (!threadId || !existsSync(CODEX_GLOBAL_STATE_FILE)) {
+  if (!existsSync(CODEX_GLOBAL_STATE_FILE)) {
     return {
       source_file: CODEX_GLOBAL_STATE_FILE,
       thread_id: threadId ?? null,
@@ -45,13 +45,15 @@ export function readCodexPermissionContext(threadId = process.env.CODEX_THREAD_I
     };
   }
 
-  const record = findPermissionRecord(state, threadId);
+  const resolved = resolvePermissionRecord(state, threadId);
+  const record = resolved?.record ?? null;
+  const resolvedThreadId = resolved?.thread_id ?? threadId ?? null;
   const approval_policy = normalizeApprovalPolicy(record?.approvalPolicy ?? null);
   const approvals_reviewer = typeof record?.approvalsReviewer === "string" ? record.approvalsReviewer : null;
   const sandbox_policy = normalizeSandboxPolicy(record?.sandboxPolicy ?? null);
   return {
     source_file: CODEX_GLOBAL_STATE_FILE,
-    thread_id: threadId,
+    thread_id: resolvedThreadId,
     found: Boolean(record),
     approval_policy,
     approvals_reviewer,
@@ -117,18 +119,53 @@ export function permissionSummaryLine(permissionProfile) {
 }
 
 function findPermissionRecord(state, threadId) {
+  if (!threadId) return null;
   const stack = [state];
   while (stack.length > 0) {
     const current = stack.pop();
     if (!current || typeof current !== "object") continue;
     for (const [key, value] of Object.entries(current)) {
-      if (key.endsWith("thread-permissions-by-id") && value && typeof value === "object" && value[threadId]) {
+      if (isThreadPermissionMapKey(key) && value && typeof value === "object" && value[threadId]) {
         return value[threadId];
       }
       if (value && typeof value === "object") stack.push(value);
     }
   }
   return null;
+}
+
+function resolvePermissionRecord(state, threadId) {
+  const direct = findPermissionRecord(state, threadId);
+  if (direct) return { thread_id: threadId, record: direct };
+  const all = collectPermissionRecords(state);
+  if (!threadId && all.length === 1) {
+    return all[0];
+  }
+  return { thread_id: threadId ?? null, record: null };
+}
+
+function collectPermissionRecords(state) {
+  const stack = [state];
+  const records = [];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current || typeof current !== "object") continue;
+    for (const [key, value] of Object.entries(current)) {
+      if (isThreadPermissionMapKey(key) && value && typeof value === "object") {
+        for (const [thread_id, record] of Object.entries(value)) {
+          if (record && typeof record === "object") {
+            records.push({ thread_id, record });
+          }
+        }
+      }
+      if (value && typeof value === "object") stack.push(value);
+    }
+  }
+  return records;
+}
+
+function isThreadPermissionMapKey(key) {
+  return typeof key === "string" && key.endsWith("thread-permissions-by-id");
 }
 
 function normalizeApprovalPolicy(value) {

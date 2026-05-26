@@ -148,6 +148,21 @@ async function runPrompt(turn) {
     return;
   }
 
+  if (turn.userInput.includes("TOOLCALL_TIMEOUT")) {
+    for (let index = 0; index < 10; index += 1) {
+      event("ToolCallPart", { arguments_part: `fragment-${index}` });
+      await sleep(120);
+      if (turn.cancelled) {
+        respond(turn.id, { status: "cancelled" });
+        event("TurnEnd", {});
+        running = null;
+        return;
+      }
+    }
+    await sleep(5_000);
+    return;
+  }
+
   if (turn.userInput.includes("FAIL_CHECK")) {
     writeFileSync(join(cwd, "hello.txt"), "wrong content\n");
     event("ContentPart", { type: "text", text: "Implementation finished with intentionally wrong content." });
