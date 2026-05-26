@@ -141,14 +141,16 @@ If Windows reports `Access is denied` when running `codex mcp`, do not stop ther
 ```powershell
 $codexCli = Join-Path $env:LOCALAPPDATA "OpenAI\Codex\bin\codex.exe"
 & $codexCli mcp add kimi-code-worker-mcp -- cmd /d /s /c kimi-code-worker-mcp
-& $codexCli mcp
+& $codexCli mcp list
 ```
 
 After adding it, verify that Codex knows the server:
 
 ```bash
-codex mcp
+codex mcp list
 ```
+
+On macOS / Linux, if `codex` is not visible on PATH in the current shell, do not assume the Desktop install is broken. Either verify from a shell that exposes Codex CLI, use `CODEX_CLI_PATH`, or fall back to writing `~/.codex/config.toml`.
 
 If the CLI path is unavailable or the user specifically wants direct file edits, write `~/.codex/config.toml` with the correct platform-specific command. Treat this as fallback only. On some Codex Desktop installs the file may later be rewritten by the app, so do not present manual file edits as the primary path.
 
@@ -180,10 +182,16 @@ Run:
 kimi-code-worker-mcp --doctor
 ```
 
+For a real end-to-end check of permission inheritance and host-side checks, use:
+
+```bash
+kimi-code-worker-mcp --doctor --live
+```
+
 Also confirm the MCP registration path:
 
 ```bash
-codex mcp
+codex mcp list
 ```
 
 If the plain `codex mcp` alias is not callable on Windows, use the `%LOCALAPPDATA%\OpenAI\Codex\bin\codex.exe` fallback shown above and verify there instead.

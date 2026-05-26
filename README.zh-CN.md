@@ -101,14 +101,20 @@ codex mcp add kimi-code-worker-mcp -- cmd /d /s /c kimi-code-worker-mcp
 ```powershell
 $codexCli = Join-Path $env:LOCALAPPDATA "OpenAI\\Codex\\bin\\codex.exe"
 & $codexCli mcp add kimi-code-worker-mcp -- cmd /d /s /c kimi-code-worker-mcp
-& $codexCli mcp
+& $codexCli mcp list
 ```
 
 然后用下面这个命令确认 Codex 已经登记了这个 MCP：
 
 ```bash
-codex mcp
+codex mcp list
 ```
+
+macOS / Linux 上如果 shell 里看不到 `codex`，也不代表 Desktop 内一定不可用。这时可以：
+
+- 换到能直接调用 Codex CLI 的 shell
+- 回退到 `~/.codex/config.toml` 的注册方式
+- 或确认当前 shell 是否暴露了 `CODEX_CLI_PATH`
 
 如果你更想直接改配置，或者 CLI 路径不可用，再回退到手动写 `~/.codex/config.toml`。但这只建议作为 fallback。部分 Codex Desktop 安装后续会重写这个文件，所以不要把手改配置当成首选安装方式。
 
@@ -171,7 +177,7 @@ Codex 重启后，当前线程不会自动恢复之前的 MCP 连接。正确做
 
 ## 权限继承
 
-启动时，MCP 会读取 `CODEX_THREAD_ID`，然后去 `~/.codex/.codex-global-state.json` 查当前线程的权限策略。
+启动时，MCP 会优先读取 `CODEX_THREAD_ID`，然后再回退到 `~/.codex/.codex-global-state.json` 里的其他信号，例如唯一的 pinned/current thread，或者唯一的权限记录。
 
 当前线程策略会被归一化成以下之一：
 
@@ -186,6 +192,36 @@ Codex 重启后，当前线程不会自动恢复之前的 MCP 连接。正确做
 - `request-consent`：遇到高权限请求时直接拒绝，不会静默提权
 
 这是自动继承，不需要额外配置。
+
+## Doctor 模式
+
+静态体检：
+
+```bash
+kimi-code-worker-mcp --doctor
+```
+
+它会检查：
+
+- Node 和 Kimi CLI 是否可用
+- 最小 `kimi --print` 调用是否正常
+- Codex 权限解析是否成功
+- Codex 是否已经注册了这个 MCP
+
+实时体检：
+
+```bash
+kimi-code-worker-mcp --doctor --live
+```
+
+它会在临时目录里真实跑一轮最小 worker，检查：
+
+- 当前权限是否真的能被 worker 继承
+- worker 是否能落目标文件
+- host-side `checks` 是否通过
+- 终态是否正确收口
+
+如果普通 `doctor` 看起来正常，但 Codex 里真实任务仍然失败，就优先跑 `--live`。
 
 ## 计划模式
 

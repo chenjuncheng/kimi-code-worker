@@ -101,14 +101,20 @@ If `codex mcp` fails on Windows with `Access is denied`, do not assume the repo 
 ```powershell
 $codexCli = Join-Path $env:LOCALAPPDATA "OpenAI\\Codex\\bin\\codex.exe"
 & $codexCli mcp add kimi-code-worker-mcp -- cmd /d /s /c kimi-code-worker-mcp
-& $codexCli mcp
+& $codexCli mcp list
 ```
 
 Then verify registration:
 
 ```bash
-codex mcp
+codex mcp list
 ```
+
+On macOS / Linux, if `codex` is not visible on PATH in your shell, the Desktop app may still work while shell-side verification fails. In that case, either:
+
+- run the command from a shell where Codex CLI is installed
+- use the MCP registration shown in `~/.codex/config.toml` as a fallback
+- or verify from a shell that exposes `CODEX_CLI_PATH`
 
 If you prefer direct config or need a fallback, write `~/.codex/config.toml` like this. Treat direct file edits as fallback only. On some Codex Desktop installs the app may later rewrite the file, so the official `codex mcp add` flow is more reliable.
 
@@ -154,7 +160,7 @@ After a Codex restart, open a new thread and invoke `$codex-kimi-code-worker` ag
 
 ## Permission Inheritance
 
-At startup, the MCP reads the current Codex thread id from `CODEX_THREAD_ID` and looks up the thread policy in `~/.codex/.codex-global-state.json`.
+At startup, the MCP prefers the current Codex thread id from `CODEX_THREAD_ID`, then falls back to other signals from `~/.codex/.codex-global-state.json` such as a single pinned/current thread or a single permission record.
 
 The current thread policy is normalized into one of these profiles:
 
@@ -169,6 +175,36 @@ The worker then adjusts Kimi Code behavior accordingly:
 - `request-consent`: fail closed on privileged requests instead of silently escalating
 
 This inheritance is automatic. No extra config is needed when Codex Desktop already has a thread policy.
+
+## Doctor Modes
+
+Static doctor:
+
+```bash
+kimi-code-worker-mcp --doctor
+```
+
+This verifies:
+
+- Node and Kimi CLI availability
+- minimal `kimi --print` health
+- Codex permission resolution
+- Codex MCP registration status
+
+Live doctor:
+
+```bash
+kimi-code-worker-mcp --doctor --live
+```
+
+This runs one real minimal worker roundtrip in a temporary directory and verifies:
+
+- the worker can inherit the current Codex permission profile
+- the worker can create the target file
+- the host-side `checks` pass
+- the terminal result is reconciled correctly
+
+Use `--live` when shell-side doctor looks healthy but real jobs still fail inside Codex.
 
 ## Plan Mode
 
