@@ -1,0 +1,334 @@
+#!/usr/bin/env node
+import { createInterface } from "node:readline";
+import { existsSync } from "node:fs";
+import { platform } from "node:os";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+import {
+  DEFAULT_CHECK_TIMEOUT_MS,
+  DEFAULT_FOREGROUND_WAIT_CAP_MS,
+  DEFAULT_PLAN_TIMEOUT_MS,
+  DEFAULT_SETUP_TIMEOUT_MS,
+  DEFAULT_SYNC_TIMEOUT_MS,
+  JOB_ROOT,
+  KIMI_BIN,
+  PLATFORM_INSTALL_HINTS,
+  SERVER_VERSION,
+  TOOL_NAMES,
+} from "./core/config.mjs";
+import { formatPermissionSummary, readCodexPermissionContext } from "./core/codex-permissions.mjs";
+import { getKimiInfo, isExecutable, probeKimiPrint } from "./kimi-wire-backend.mjs";
+import { JobRuntime } from "./job-runtime.mjs";
+
+const runtime = new JobRuntime();
+const execFileAsync = promisify(execFile);
+
+const outputSchema = z.object({
+  server_version: z.string(),
+  status: z.string(),
+}).passthrough();
+
+const planSchema = z.object({
+  cwd: z.string(),
+  task: z.string(),
+  allowed_dirs: z.array(z.string()).optional(),
+  forbidden_paths: z.array(z.string()).optional(),
+  ignored_dirs: z.array(z.string()).optional(),
+  model: z.string().optional(),
+  timeout_ms: z.number().optional(),
+  kimi_bin: z.string().optional(),
+});
+
+const startSchema = z.object({
+  cwd: z.string(),
+  task: z.string().describe("One implementation slice. Codex should define scope and final acceptance before calling this tool."),
+  allowed_dirs: z.array(z.string()).optional(),
+  forbidden_paths: z.array(z.string()).optional(),
+  ignored_dirs: z.array(z.string()).optional(),
+  checks: z.array(z.string()).optional(),
+  model: z.string().optional(),
+  timeout_ms: z.number().optional(),
+  check_timeout_ms: z.number().optional(),
+  kimi_bin: z.string().optional(),
+});
+
+const getSchema = z.object({
+  job_id: z.string(),
+  include_logs: z.boolean().optional(),
+  include_events: z.boolean().optional(),
+  include_diff: z.boolean().optional(),
+});
+
+const waitSchema = getSchema.extend({
+  max_wait_ms: z.number().optional().describe("Short foreground observation window. Prefer about 15000-30000ms."),
+  poll_interval_ms: z.number().optional().describe("Short internal observation interval. Prefer about 5000-15000ms."),
+});
+
+const steerSchema = z.object({
+  job_id: z.string(),
+  guidance: z.string().describe("One concise correction for a running job. Use only when direction is clearly wrong."),
+});
+
+const cancelSchema = z.object({
+  job_id: z.string(),
+});
+
+if (process.argv.includes("--setup")) {
+  runSetup().then((ok) => process.exit(ok ? 0 : 1));
+} else if (process.argv.includes("--doctor")) {
+  runDoctor().then((ok) => process.exit(ok ? 0 : 1));
+} else {
+  runMcpServer().catch((error) => {
+    console.error(error.message);
+    process.exit(1);
+  });
+}
+
+async function runMcpServer() {
+  installLifecycleHandlers();
+  const server = new McpServer({
+    name: "kimi-code-worker-mcp",
+    version: SERVER_VERSION,
+  });
+
+  server.registerTool(
+    TOOL_NAMES.plan,
+    {
+      title: "Plan Kimi implementation slice",
+      description: "Run one explicit planning pass in Kimi plan mode. Returns a compact JSON-ready plan summary without editing files.",
+      inputSchema: planSchema,
+      outputSchema,
+    },
+    async (args) => {
+      try {
+        return toolResult(await runtime.planImplementation(args));
+      } catch (error) {
+        return toolErrorResult(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    TOOL_NAMES.start,
+    {
+      title: "Start Kimi implementation job",
+      description: "Start one implementation slice. Codex stays responsible for scope, checks, and final review.",
+      inputSchema: startSchema,
+      outputSchema,
+    },
+    async (args) => {
+      try {
+        return toolResult(await runtime.startImplementation(args));
+      } catch (error) {
+        return toolErrorResult(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    TOOL_NAMES.get,
+    {
+      title: "Read Kimi job status",
+      description: "Read compact status or terminal summary. Logs, events, and diffs are opt-in.",
+      inputSchema: getSchema,
+      outputSchema,
+    },
+    async (args) => toolResult(runtime.getJob(args))
+  );
+
+  server.registerTool(
+    TOOL_NAMES.wait,
+    {
+      title: "Observe Kimi job briefly",
+      description: "Wait briefly for a terminal result. Prefer short windows and switch back to kimi_get_job for the main loop.",
+      inputSchema: waitSchema,
+      outputSchema,
+    },
+    async (args) => toolResult(await runtime.waitForJob(args))
+  );
+
+  server.registerTool(
+    TOOL_NAMES.steer,
+    {
+      title: "Steer running Kimi job",
+      description: "Inject one concise correction into a running job. This is for clear misdirection, not routine interaction.",
+      inputSchema: steerSchema,
+      outputSchema,
+    },
+    async (args) => {
+      try {
+        return toolResult(await runtime.steerJob(args));
+      } catch (error) {
+        return toolErrorResult(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    TOOL_NAMES.cancel,
+    {
+      title: "Cancel running Kimi job",
+      description: "Request cancellation of a running job.",
+      inputSchema: cancelSchema,
+      outputSchema,
+    },
+    async (args) => {
+      try {
+        return toolResult(await runtime.cancelJob(args));
+      } catch (error) {
+        return toolErrorResult(error);
+      }
+    }
+  );
+
+  await server.connect(new StdioServerTransport());
+}
+
+async function runDoctor() {
+  const checks = [];
+  checks.push({
+    name: "node_version",
+    ok: Number(process.versions.node.split(".")[0]) >= 20,
+    detail: process.version,
+  });
+  checks.push({
+    name: "kimi_cli_path",
+    ok: isExecutable(KIMI_BIN),
+    detail: KIMI_BIN,
+  });
+  try {
+    const info = await getKimiInfo(KIMI_BIN);
+    checks.push({
+      name: "kimi_cli_info",
+      ok: Boolean(info.version),
+      detail: `version=${info.version ?? "unknown"}, wire=${info.wire_protocol_version ?? "unknown"}`,
+    });
+  } catch (error) {
+    checks.push({
+      name: "kimi_cli_info",
+      ok: false,
+      detail: error.message,
+    });
+  }
+  try {
+    const probe = await probeKimiPrint(KIMI_BIN);
+    checks.push({
+      name: "kimi_minimal_call",
+      ok: probe.ok,
+      detail: probe.ok ? probe.stdout : probe.stderr || probe.stdout || `exit ${probe.exit_code}`,
+    });
+  } catch (error) {
+    checks.push({
+      name: "kimi_minimal_call",
+      ok: false,
+      detail: error.message,
+    });
+  }
+  const codexPermission = readCodexPermissionContext();
+  checks.push({
+    name: "codex_thread_permission",
+    ok: codexPermission.found,
+    detail: codexPermission.found ? formatPermissionSummary(codexPermission.permission_profile) : `thread=${codexPermission.thread_id ?? "unknown"}`,
+  });
+  checks.push({
+    name: "job_root",
+    ok: existsSync(JOB_ROOT),
+    detail: JOB_ROOT,
+  });
+
+  const ok = checks.every((check) => check.ok);
+  process.stdout.write(`${JSON.stringify({
+    server: "kimi-code-worker-mcp",
+    server_version: SERVER_VERSION,
+    checks,
+    codex_permission: codexPermission,
+    defaults: {
+      plan_timeout_ms: DEFAULT_PLAN_TIMEOUT_MS,
+      timeout_ms: DEFAULT_SYNC_TIMEOUT_MS,
+      check_timeout_ms: DEFAULT_CHECK_TIMEOUT_MS,
+      foreground_wait_cap_ms: DEFAULT_FOREGROUND_WAIT_CAP_MS,
+    },
+  }, null, 2)}\n`);
+  return ok;
+}
+
+async function runSetup() {
+  const hint = PLATFORM_INSTALL_HINTS[platform()] ?? PLATFORM_INSTALL_HINTS.linux;
+  if (!isExecutable(KIMI_BIN)) {
+    process.stdout.write(`kimi CLI is not available on PATH.\nInstall command: ${hint}\n`);
+    if (!(await promptYesNo("Run the official install command now? [y/N] "))) return false;
+    const ok = await runInstallCommand();
+    if (!ok) return false;
+  }
+
+  process.stdout.write("Starting `kimi login` ...\n");
+  const { stdout, stderr } = await execFileAsync(KIMI_BIN, ["login"], {
+    timeout: DEFAULT_SETUP_TIMEOUT_MS,
+    windowsHide: true,
+  });
+  if (stdout) process.stdout.write(stdout);
+  if (stderr) process.stderr.write(stderr);
+  process.stdout.write("Run `node src/kimi-code-worker-mcp.mjs --doctor` to verify the environment.\n");
+  return true;
+}
+
+async function runInstallCommand() {
+  if (platform() === "win32") {
+    await execFileAsync("pwsh", ["-NoProfile", "-Command", PLATFORM_INSTALL_HINTS.win32], {
+      timeout: DEFAULT_SETUP_TIMEOUT_MS,
+      windowsHide: true,
+    });
+    return true;
+  }
+  await execFileAsync("bash", ["-lc", PLATFORM_INSTALL_HINTS[platform()] ?? PLATFORM_INSTALL_HINTS.linux], {
+    timeout: DEFAULT_SETUP_TIMEOUT_MS,
+    windowsHide: true,
+  });
+  return true;
+}
+
+function installLifecycleHandlers() {
+  const shutdown = async (code) => {
+    await runtime.shutdown();
+    process.exit(code);
+  };
+  process.on("SIGINT", () => void shutdown(130));
+  process.on("SIGTERM", () => void shutdown(0));
+  process.stdin.on("end", () => void shutdown(0));
+}
+
+function promptYesNo(question) {
+  return new Promise((resolvePromise) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(question, (answer) => {
+      rl.close();
+      resolvePromise(/^y(es)?$/i.test(answer.trim()));
+    });
+  });
+}
+
+function toolResult(value) {
+  const payload = {
+    server_version: SERVER_VERSION,
+    ...value,
+  };
+  return {
+    structuredContent: payload,
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(payload),
+      },
+    ],
+  };
+}
+
+function toolErrorResult(error) {
+  return toolResult({
+    status: "error",
+    error: error.message,
+  });
+}

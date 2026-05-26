@@ -1,0 +1,42 @@
+{
+  "name": "kimi-code-worker",
+  "version": "0.1.0-beta.0",
+  "description": "MCP server that runs Kimi Code CLI as a coding worker over Wire with planning, lightweight status, and authoritative host-side checks.",
+  "keywords": [
+    "mcp",
+    "kimi",
+    "kimi-code",
+    "codex",
+    "coding-agent"
+  ],
+  "license": "MIT",
+  "private": false,
+  "type": "module",
+  "bin": {
+    "kimi-code-worker-mcp": "bin/kimi-code-worker-mcp.mjs",
+    "kimi-code-worker-setup": "bin/kimi-code-worker-setup.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "bin",
+    "src",
+    "scripts",
+    "LICENSE",
+    "README.md",
+    "README.zh-CN.md"
+  ],
+  "scripts": {
+    "mcp:start": "node src/kimi-code-worker-mcp.mjs",
+    "mcp:doctor": "node src/kimi-code-worker-mcp.mjs --doctor",
+    "mcp:setup": "node src/kimi-code-worker-mcp.mjs --setup",
+    "mcp:smoke:tools": "node scripts/smoke-tools-list.mjs",
+    "mcp:smoke:workflow": "node scripts/smoke-workflow.mjs",
+    "mcp:smoke:wire": "node scripts/smoke-wire-backend.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.76"
+  }
+}
