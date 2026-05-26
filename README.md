@@ -14,6 +14,12 @@ The workflow is intentionally narrow:
 
 This project is optimized for lower Codex main-thread token usage on suitable coding tasks, not for interactive mid-run chatting.
 
+One-line install prompt for Codex:
+
+```text
+Install the `codex-kimi-code-worker` skill and `kimi-code-worker-mcp` from `chenjuncheng/kimi-code-worker`, verify Kimi login and a hello-world call, write `~/.codex/config.toml`, then tell me to restart Codex.
+```
+
 ## What It Does
 
 - Runs Kimi Code CLI in `--wire` mode as the worker backend
@@ -75,6 +81,36 @@ kimi-code-worker-mcp --doctor
 ```
 
 Codex Desktop MCP config for `~/.codex/config.toml` on macOS / Linux:
+
+Prefer the official Codex CLI first:
+
+macOS / Linux:
+
+```bash
+codex mcp add kimi-code-worker-mcp -- kimi-code-worker-mcp
+```
+
+Windows:
+
+```powershell
+codex mcp add kimi-code-worker-mcp -- cmd /d /s /c kimi-code-worker-mcp
+```
+
+If `codex mcp` fails on Windows with `Access is denied`, do not assume the repo is broken. Some Codex Desktop installs expose a `WindowsApps` alias that is present on PATH but not callable from the current shell. Retry with the real Codex binary:
+
+```powershell
+$codexCli = Join-Path $env:LOCALAPPDATA "OpenAI\\Codex\\bin\\codex.exe"
+& $codexCli mcp add kimi-code-worker-mcp -- cmd /d /s /c kimi-code-worker-mcp
+& $codexCli mcp
+```
+
+Then verify registration:
+
+```bash
+codex mcp
+```
+
+If you prefer direct config or need a fallback, write `~/.codex/config.toml` like this. Treat direct file edits as fallback only. On some Codex Desktop installs the app may later rewrite the file, so the official `codex mcp add` flow is more reliable.
 
 ```toml
 [mcp_servers."kimi-code-worker-mcp"]

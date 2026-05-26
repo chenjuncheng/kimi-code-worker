@@ -121,7 +121,35 @@ If `kimi-code-worker-mcp` is already on PATH and `kimi-code-worker-mcp --doctor`
 
 ### 4. Write Codex MCP config
 
-Write `~/.codex/config.toml` with the correct platform-specific command.
+Prefer the official Codex MCP CLI first:
+
+macOS / Linux:
+
+```bash
+codex mcp add kimi-code-worker-mcp -- kimi-code-worker-mcp
+```
+
+Windows:
+
+```powershell
+codex mcp add kimi-code-worker-mcp -- cmd /d /s /c kimi-code-worker-mcp
+```
+
+If Windows reports `Access is denied` when running `codex mcp`, do not stop there. Some Codex Desktop installs expose a `WindowsApps` alias that is visible on PATH but not callable from the current shell. In that case, retry with the real Codex binary under `%LOCALAPPDATA%\OpenAI\Codex\bin`:
+
+```powershell
+$codexCli = Join-Path $env:LOCALAPPDATA "OpenAI\Codex\bin\codex.exe"
+& $codexCli mcp add kimi-code-worker-mcp -- cmd /d /s /c kimi-code-worker-mcp
+& $codexCli mcp
+```
+
+After adding it, verify that Codex knows the server:
+
+```bash
+codex mcp
+```
+
+If the CLI path is unavailable or the user specifically wants direct file edits, write `~/.codex/config.toml` with the correct platform-specific command. Treat this as fallback only. On some Codex Desktop installs the file may later be rewritten by the app, so do not present manual file edits as the primary path.
 
 macOS / Linux:
 
@@ -151,6 +179,14 @@ Run:
 kimi-code-worker-mcp --doctor
 ```
 
+Also confirm the MCP registration path:
+
+```bash
+codex mcp
+```
+
+If the plain `codex mcp` alias is not callable on Windows, use the `%LOCALAPPDATA%\OpenAI\Codex\bin\codex.exe` fallback shown above and verify there instead.
+
 If `doctor` passes, tell the user:
 
 - Codex Desktop must be restarted to load the new MCP
@@ -163,7 +199,7 @@ At the start of a later session:
 
 1. Check whether `kimi-code-worker-mcp` tools are already available.
 2. If the MCP is loaded, skip onboarding and go straight to the worker workflow.
-3. If the MCP is missing but the command exists, remind the user to restart Codex.
+3. If the MCP is missing but the command exists, first check `codex mcp` to confirm registration. On Windows, if that alias fails with `Access is denied`, retry with `%LOCALAPPDATA%\OpenAI\Codex\bin\codex.exe`. Only after registration is confirmed should you remind the user to restart Codex.
 4. If the command is missing or `doctor` fails, return to onboarding.
 
 Do not redo installation if the machine is already healthy.

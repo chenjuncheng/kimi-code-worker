@@ -14,6 +14,12 @@
 
 这套流程的目标是尽量减少 Codex 主线程 token 消耗，不是做运行中对话式引导。
 
+一句话安装提示，直接发给你的 Codex：
+
+```text
+从 `chenjuncheng/kimi-code-worker` 安装 `codex-kimi-code-worker` skill 和 `kimi-code-worker-mcp`，完成 Kimi 登录和 hello world 验证，写入 `~/.codex/config.toml`，然后提醒我重启 Codex。
+```
+
 ## 它做什么
 
 - 通过 Kimi Code CLI 的 `--wire` 模式运行 worker
@@ -75,6 +81,36 @@ kimi-code-worker-mcp --doctor
 ```
 
 macOS / Linux 的 Codex Desktop MCP 配置，写入 `~/.codex/config.toml`：
+
+优先使用官方推荐的 Codex MCP CLI：
+
+macOS / Linux：
+
+```bash
+codex mcp add kimi-code-worker-mcp -- kimi-code-worker-mcp
+```
+
+Windows：
+
+```powershell
+codex mcp add kimi-code-worker-mcp -- cmd /d /s /c kimi-code-worker-mcp
+```
+
+如果 Windows 上直接执行 `codex mcp` 报 `Access is denied`，不要马上判断仓库坏了。部分 Codex Desktop 安装会在 PATH 里暴露一个 `WindowsApps` 别名，但当前 shell 其实不能直接调用。此时改用真正的 Codex 可执行文件：
+
+```powershell
+$codexCli = Join-Path $env:LOCALAPPDATA "OpenAI\\Codex\\bin\\codex.exe"
+& $codexCli mcp add kimi-code-worker-mcp -- cmd /d /s /c kimi-code-worker-mcp
+& $codexCli mcp
+```
+
+然后用下面这个命令确认 Codex 已经登记了这个 MCP：
+
+```bash
+codex mcp
+```
+
+如果你更想直接改配置，或者 CLI 路径不可用，再回退到手动写 `~/.codex/config.toml`。但这只建议作为 fallback。部分 Codex Desktop 安装后续会重写这个文件，所以不要把手改配置当成首选安装方式。
 
 ```toml
 [mcp_servers."kimi-code-worker-mcp"]
