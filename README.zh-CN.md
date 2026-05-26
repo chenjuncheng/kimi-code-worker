@@ -60,15 +60,38 @@ npm run mcp:setup
 npm run mcp:doctor
 ```
 
-Codex Desktop MCP 配置示例，写入 `~/.codex/config.toml`：
+开发阶段可以先把本地 checkout 链接成命令：
+
+```bash
+npm link
+kimi-code-worker-mcp --doctor
+```
+
+发布到 npm 后，用户可以直接全局安装：
+
+```bash
+npm install -g kimi-code-worker
+kimi-code-worker-mcp --doctor
+```
+
+macOS / Linux 的 Codex Desktop MCP 配置，写入 `~/.codex/config.toml`：
 
 ```toml
 [mcp_servers."kimi-code-worker-mcp"]
-command = "node"
-args = ['C:\absolute\path\to\kimi-code-worker\bin\kimi-code-worker-mcp.mjs']
+command = "kimi-code-worker-mcp"
+args = []
 ```
 
-如果你更喜欢脚本入口，也可以直接用 `node src/kimi-code-worker-mcp.mjs` 或 `npm run mcp:start`。
+Windows 上建议通过 `cmd` 启动 npm 生成的命令 shim：
+
+```toml
+[mcp_servers."kimi-code-worker-mcp"]
+command = "cmd"
+args = ["/d", "/s", "/c", "kimi-code-worker-mcp"]
+startup_timeout_sec = 120
+```
+
+本地开发如果不使用 `npm link`，也可以直接用 `node src/kimi-code-worker-mcp.mjs` 或 `npm run mcp:start`。
 
 ## 权限继承
 

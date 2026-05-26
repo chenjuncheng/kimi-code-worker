@@ -60,15 +60,38 @@ npm run mcp:setup
 npm run mcp:doctor
 ```
 
-Codex Desktop MCP config example for `~/.codex/config.toml`:
+Install the package command from a local checkout during development:
+
+```bash
+npm link
+kimi-code-worker-mcp --doctor
+```
+
+After publishing to npm, users can install it globally instead:
+
+```bash
+npm install -g kimi-code-worker
+kimi-code-worker-mcp --doctor
+```
+
+Codex Desktop MCP config for `~/.codex/config.toml` on macOS / Linux:
 
 ```toml
 [mcp_servers."kimi-code-worker-mcp"]
-command = "node"
-args = ['C:\absolute\path\to\kimi-code-worker\bin\kimi-code-worker-mcp.mjs']
+command = "kimi-code-worker-mcp"
+args = []
 ```
 
-If you prefer a local script entry point, use `node src/kimi-code-worker-mcp.mjs` or `npm run mcp:start`.
+On Windows, use `cmd` to launch the npm command shim:
+
+```toml
+[mcp_servers."kimi-code-worker-mcp"]
+command = "cmd"
+args = ["/d", "/s", "/c", "kimi-code-worker-mcp"]
+startup_timeout_sec = 120
+```
+
+For local development without `npm link`, use `node src/kimi-code-worker-mcp.mjs` or `npm run mcp:start`.
 
 ## Permission Inheritance
 
