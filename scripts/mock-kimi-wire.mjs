@@ -182,7 +182,10 @@ async function runPrompt(turn) {
 
   mkdirSync(join(cwd, "src"), { recursive: true });
   writeFileSync(join(cwd, "src", "worker-prompt.txt"), turn.userInput);
-  if (turn.userInput.includes("MAKE_HELLO")) {
+  if (turn.userInput.includes("LIVE_OK")) {
+    mkdirSync(join(cwd, "reports"), { recursive: true });
+    writeFileSync(join(cwd, "reports", "kimi-doctor-live.txt"), "LIVE_OK\n");
+  } else if (turn.userInput.includes("MAKE_HELLO")) {
     writeFileSync(join(cwd, "hello.txt"), "Hello from mock Kimi Wire!\n");
   } else if (turn.userInput.includes("OUTSIDE_SCOPE")) {
     writeFileSync(join(cwd, "hello.txt"), "Hello from mock Kimi Wire!\n");

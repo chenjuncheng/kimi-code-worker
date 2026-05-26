@@ -247,7 +247,7 @@ export class KimiWireBackend {
     const payload = params?.payload ?? {};
     if (!this.child || this.closed) return;
     if (type === "ApprovalRequest") {
-      const decision = decideApprovalResponse(payload, this.permission_profile);
+      const decision = decideApprovalResponse(payload, this.permission_profile, this.codex_permission);
       this.child.stdin.write(`${JSON.stringify({
         jsonrpc: "2.0",
         id,
@@ -268,7 +268,7 @@ export class KimiWireBackend {
       return;
     }
     if (type === "HookRequest") {
-      const decision = decideHookResponse(payload, this.permission_profile);
+      const decision = decideHookResponse(payload, this.permission_profile, this.codex_permission);
       this.child.stdin.write(`${JSON.stringify({
         jsonrpc: "2.0",
         id,
@@ -325,7 +325,7 @@ function nodeScriptInvocation(command, args) {
   return { command, args };
 }
 
-function decideApprovalResponse(payload, permissionProfile) {
+function decideApprovalResponse(payload, permissionProfile, codexPermission = null) {
   const profile = permissionProfile?.mode ?? "unknown";
   if (profile === "full_access") {
     return { response: "approve_for_session" };
@@ -333,7 +333,12 @@ function decideApprovalResponse(payload, permissionProfile) {
   if (profile === "request_consent") {
     return {
       response: "reject",
-      feedback: "Inherited Codex thread permission is request-consent; rerun with a narrower slice or higher permission.",
+      feedback: buildPermissionBlockFeedback({
+        headline: "Inherited Codex thread permission is request-consent.",
+        permissionProfile,
+        codexPermission,
+        nextAction: "Rerun from a higher-privilege Codex thread or narrow the slice to read-only work.",
+      }),
     };
   }
   if (isLikelySafeApprovalRequest(payload)) {
@@ -341,11 +346,18 @@ function decideApprovalResponse(payload, permissionProfile) {
   }
   return {
     response: "reject",
-    feedback: "Blocked by inherited Codex thread permission profile; narrow the task or request a higher-privilege run.",
+    feedback: buildPermissionBlockFeedback({
+      headline: "Blocked by inherited Codex thread permission profile.",
+      permissionProfile,
+      codexPermission,
+      nextAction: profile === "unknown"
+        ? "If you recently changed MCP install, config, or permission logic, restart Codex. Otherwise run `kimi-code-worker-mcp --doctor --live` and inspect the resolved thread id."
+        : "Narrow the task or rerun from a higher-privilege Codex thread.",
+    }),
   };
 }
 
-function decideHookResponse(payload, permissionProfile) {
+function decideHookResponse(payload, permissionProfile, codexPermission = null) {
   const profile = permissionProfile?.mode ?? "unknown";
   if (profile === "full_access") {
     return { action: "allow", reason: "" };
@@ -353,11 +365,36 @@ function decideHookResponse(payload, permissionProfile) {
   if (profile === "request_consent") {
     return isLikelySafeHookRequest(payload)
       ? { action: "allow", reason: "" }
-      : { action: "block", reason: "Inherited Codex thread permission is request-consent." };
+      : {
+        action: "block",
+        reason: buildPermissionBlockFeedback({
+          headline: "Inherited Codex thread permission is request-consent.",
+          permissionProfile,
+          codexPermission,
+          nextAction: "Rerun from a higher-privilege Codex thread or narrow the slice to read-only work.",
+        }),
+      };
   }
   return isLikelySafeHookRequest(payload)
     ? { action: "allow", reason: "" }
-    : { action: "block", reason: "Blocked by inherited Codex thread permission profile." };
+    : {
+      action: "block",
+      reason: buildPermissionBlockFeedback({
+        headline: "Blocked by inherited Codex thread permission profile.",
+        permissionProfile,
+        codexPermission,
+        nextAction: profile === "unknown"
+          ? "If you recently changed MCP install, config, or permission logic, restart Codex. Otherwise run `kimi-code-worker-mcp --doctor --live` and inspect the resolved thread id."
+          : "Narrow the task or rerun from a higher-privilege Codex thread.",
+      }),
+    };
+}
+
+function buildPermissionBlockFeedback({ headline, permissionProfile, codexPermission, nextAction }) {
+  const threadId = codexPermission?.thread_id ?? "unknown";
+  const source = codexPermission?.resolution_source ?? "unknown";
+  const profile = permissionProfile?.label ?? "unknown";
+  return `${headline} thread_id=${threadId}; permission_source=${source}; permission_profile=${profile}; next_action=${nextAction}`;
 }
 
 function isLikelySafeApprovalRequest(payload) {

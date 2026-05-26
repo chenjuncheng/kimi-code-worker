@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { createInterface } from "node:readline";
-import { existsSync } from "node:fs";
-import { platform } from "node:os";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { platform, tmpdir } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -81,7 +82,7 @@ const cancelSchema = z.object({
 if (process.argv.includes("--setup")) {
   runSetup().then((ok) => process.exit(ok ? 0 : 1));
 } else if (process.argv.includes("--doctor")) {
-  runDoctor().then((ok) => process.exit(ok ? 0 : 1));
+  runDoctor({ live: process.argv.includes("--live") }).then((ok) => process.exit(ok ? 0 : 1));
 } else {
   runMcpServer().catch((error) => {
     console.error(error.message);
@@ -189,7 +190,7 @@ async function runMcpServer() {
   await server.connect(new StdioServerTransport());
 }
 
-async function runDoctor() {
+async function runDoctor({ live = false } = {}) {
   const checks = [];
   checks.push({
     name: "node_version",
@@ -248,6 +249,17 @@ async function runDoctor() {
     ok: existsSync(JOB_ROOT),
     detail: JOB_ROOT,
   });
+  let doctorLive = null;
+  if (live) {
+    doctorLive = await runDoctorLiveCheck();
+    checks.push({
+      name: "doctor_live_roundtrip",
+      ok: doctorLive.ok,
+      detail: doctorLive.ok
+        ? `job=${doctorLive.job_id} result=${doctorLive.result_status} permission=${doctorLive.codex_permission_profile}`
+        : doctorLive.detail,
+    });
+  }
 
   const ok = checks.every((check) => check.ok);
   process.stdout.write(`${JSON.stringify({
@@ -256,6 +268,7 @@ async function runDoctor() {
     checks,
     codex_permission: codexPermission,
     codex_mcp_registration: codexMcpRegistration,
+    ...(doctorLive ? { doctor_live: doctorLive } : {}),
     defaults: {
       plan_timeout_ms: DEFAULT_PLAN_TIMEOUT_MS,
       timeout_ms: DEFAULT_SYNC_TIMEOUT_MS,
@@ -264,6 +277,90 @@ async function runDoctor() {
     },
   }, null, 2)}\n`);
   return ok;
+}
+
+async function runDoctorLiveCheck() {
+  const cwd = join(tmpdir(), `kimi-code-worker-doctor-live-${Date.now()}`);
+  const liveFile = join(cwd, "reports", "kimi-doctor-live.txt");
+  const checkScript = join(cwd, "check-live-output.mjs");
+  mkdirSync(join(cwd, "reports"), { recursive: true });
+  writeFileSync(checkScript, [
+    'import { readFileSync } from "node:fs";',
+    'const content = readFileSync("reports/kimi-doctor-live.txt", "utf8").trim();',
+    'if (content !== "LIVE_OK") {',
+    '  console.error(`Unexpected content: ${content}`);',
+    '  process.exit(1);',
+    '}',
+    'process.stdout.write("LIVE_OK\\n");',
+  ].join("\n"));
+
+  const liveRuntime = new JobRuntime();
+  try {
+    const started = await liveRuntime.startImplementation({
+      cwd,
+      task: "Create reports/kimi-doctor-live.txt containing exactly LIVE_OK. Only do this slice.",
+      allowed_dirs: ["reports", "src"],
+      checks: ["node ./check-live-output.mjs"],
+      timeout_ms: 120_000,
+      check_timeout_ms: 30_000,
+    });
+    const terminal = await liveRuntime.waitForJob({
+      job_id: started.job_id,
+      max_wait_ms: 90_000,
+      poll_interval_ms: 1_000,
+      include_logs: false,
+      include_events: false,
+      include_diff: false,
+    });
+    const file_exists = existsSync(liveFile);
+    const file_content = file_exists ? readFileSync(liveFile, "utf8").trim() : null;
+    const result = terminal.result ?? null;
+    const ok = terminal.status === "completed"
+      && result?.status === "changed_files"
+      && result?.codex_permission_profile !== "unknown"
+      && file_exists
+      && file_content === "LIVE_OK"
+      && Array.isArray(result?.checks_run)
+      && result.checks_run.every((check) => check.exit_code === 0 && !check.timed_out);
+    return {
+      ok,
+      detail: ok ? "live roundtrip succeeded" : `live roundtrip failed: terminal=${terminal.status} result=${result?.status ?? "unknown"}`,
+      job_id: started.job_id,
+      terminal_status: terminal.status,
+      result_status: result?.status ?? null,
+      codex_permission_profile: result?.codex_permission_profile ?? null,
+      useful_outputs_present: Boolean(result?.useful_outputs_present),
+      produced_files: result?.produced_files ?? [],
+      checks_run: result?.checks_run ?? [],
+      file_exists,
+      file_content,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      detail: error.message,
+      job_id: null,
+      terminal_status: null,
+      result_status: null,
+      codex_permission_profile: null,
+      useful_outputs_present: false,
+      produced_files: [],
+      checks_run: [],
+      file_exists: existsSync(liveFile),
+      file_content: existsSync(liveFile) ? readFileSync(liveFile, "utf8").trim() : null,
+    };
+  } finally {
+    await liveRuntime.shutdown();
+    cleanupDoctorLiveDirectory(cwd);
+  }
+}
+
+function cleanupDoctorLiveDirectory(path) {
+  try {
+    rmSync(path, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  } catch {
+    // Best effort cleanup only.
+  }
 }
 
 async function runSetup() {
